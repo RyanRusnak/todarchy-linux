@@ -238,38 +238,53 @@ pub async fn spawn_watcher(app: AppHandle) -> Result<()> {
     watcher.watch(&watch_dir, RecursiveMode::NonRecursive)?;
     tracing::info!("watching omarchy current dir: {}", watch_dir.display());
 
-    // Debounce — omarchy-theme-set touches multiple files.
-    let mut last_emit = std::time::Instant::now()
-        .checked_sub(Duration::from_secs(10))
-        .unwrap_or_else(std::time::Instant::now);
+    // Trailing-edge debounce. `omarchy-theme-set` fires a burst of events over
+    // ~300-500ms (rm next-theme, mkdir, cp, rm theme, mv, echo theme.name).
+    // We want to read AFTER that flurry lands, not during it — otherwise we
+    // see the pre-swap state and the real swap gets silently coalesced into a
+    // leading-edge debounce window. So: when an event arrives, wait for the
+    // channel to go quiet for QUIET_MS before reading; every subsequent event
+    // during the wait resets the timer.
+    const QUIET_MS: u64 = 250;
 
-    while let Some(ev) = rx.recv().await {
-        match ev {
-            Ok(e) if matches!(
-                e.kind,
-                EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-            ) => {
-                if last_emit.elapsed() < Duration::from_millis(200) {
-                    continue;
-                }
-                // brief settle — omarchy rewrites several files back to back
-                tokio::time::sleep(Duration::from_millis(120)).await;
+    while let Some(first) = rx.recv().await {
+        if !is_relevant(&first) { continue; }
 
-                match read_current() {
-                    Ok(tokens) => {
-                        tracing::info!("theme changed → {}", tokens.name);
-                        let _ = app.emit("theme-changed", &tokens);
-                        last_emit = std::time::Instant::now();
-                    }
-                    Err(err) => tracing::warn!("theme reload failed: {err}"),
+        // Drain additional events until the channel is silent for QUIET_MS.
+        loop {
+            match tokio::time::timeout(
+                Duration::from_millis(QUIET_MS),
+                rx.recv(),
+            ).await {
+                Ok(Some(ev)) => {
+                    // More activity — keep waiting. Surface watcher errors.
+                    if let Err(e) = ev { tracing::warn!("watcher error: {e}"); }
                 }
+                Ok(None) => return Ok(()), // channel closed
+                Err(_) => break,            // quiet — the swap is done
             }
-            Ok(_) => {}
-            Err(err) => tracing::warn!("watcher error: {err}"),
+        }
+
+        match read_current() {
+            Ok(tokens) => {
+                tracing::info!("theme changed → {}", tokens.name);
+                let _ = app.emit("theme-changed", &tokens);
+            }
+            Err(err) => tracing::warn!("theme reload failed: {err}"),
         }
     }
 
     Ok(())
+}
+
+fn is_relevant(ev: &notify::Result<Event>) -> bool {
+    matches!(
+        ev,
+        Ok(e) if matches!(
+            e.kind,
+            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+        )
+    )
 }
 
 // ---------- Color utilities ----------
