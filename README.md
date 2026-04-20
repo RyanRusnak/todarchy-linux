@@ -30,7 +30,7 @@ Requires `rustup` + `npm` + `webkit2gtk-4.1` + `libayatana-appindicator`
 (all already on a fresh Omarchy install).
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/todarchy-linux.git
+git clone https://github.com/ryanrusnak/todarchy-linux.git
 cd todarchy-linux
 
 npm install
