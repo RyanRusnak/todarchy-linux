@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "todarchy tasks.json",
+  "type": "object",
+  "required": ["version", "tasks"],
+  "properties": {
+    "version": { "const": 1 },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "done", "createdAt"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "title": { "type": "string", "minLength": 1 },
+          "notes": { "type": "string" },
+          "context": { "type": ["string", "null"] },
+          "project": { "type": ["string", "null"] },
+          "dueAt": { "type": ["integer", "null"] },
+          "deferUntil": { "type": ["integer", "null"] },
+          "estimateMinutes": { "type": ["integer", "null"] },
+          "done": { "type": "boolean" },
+          "completedAt": { "type": ["integer", "null"] },
+          "createdAt": { "type": "integer" },
+          "updatedAt": { "type": "integer" },
+          "authorDevice": { "type": "string" },
+          "tombstone": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "color": { "type": "string" }
+        }
+      }
+    },
+    "contexts": { "type": "array", "items": { "type": "string" } }
+  }
+}

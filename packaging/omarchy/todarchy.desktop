@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=todarchy
+Comment=Keyboard-first tasks for Omarchy
+Exec=todarchy
+Icon=todarchy
+Terminal=false
+Categories=Utility;Office;
+Keywords=todo;tasks;gtd;
+StartupWMClass=todarchy

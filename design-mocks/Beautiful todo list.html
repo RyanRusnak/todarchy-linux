@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>todarchy — ~/tasks</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&display=swap" rel="stylesheet" />
+
+<style>
+  /* ---------- THEME TOKENS ---------- */
+  :root {
+    /* default: Tokyo Night */
+    --bg:        #1a1b26;
+    --bg-elev:   #16171f;
+    --bg-soft:   #1f2030;
+    --panel:     #1f2335;
+    --border:    #2a2e42;
+    --border-hi: #3b4261;
+
+    --fg:        #c0caf5;
+    --fg-dim:    #9aa5ce;
+    --fg-mute:   #565f89;
+    --fg-faint:  #3b4261;
+
+    --accent:    #7aa2f7;  /* blue */
+    --accent-2:  #bb9af7;  /* magenta */
+    --success:   #9ece6a;
+    --warn:      #e0af68;
+    --danger:    #f7768e;
+    --cyan:      #7dcfff;
+    --orange:    #ff9e64;
+
+    --shadow: 0 30px 80px rgba(0,0,0,.55), 0 4px 14px rgba(0,0,0,.35);
+    --radius: 10px;
+    --border-w: 2px;
+  }
+
+  /* Catppuccin Mocha */
+  [data-theme="catppuccin"] {
+    --bg:        #1e1e2e;
+    --bg-elev:   #181825;
+    --bg-soft:   #242438;
+    --panel:     #181825;
+    --border:    #313244;
+    --border-hi: #45475a;
+    --fg:        #cdd6f4;
+    --fg-dim:    #a6adc8;
+    --fg-mute:   #7f849c;
+    --fg-faint:  #45475a;
+    --accent:    #cba6f7;
+    --accent-2:  #f5c2e7;
+    --success:   #a6e3a1;
+    --warn:      #f9e2af;
+    --danger:    #f38ba8;
+    --cyan:      #94e2d5;
+    --orange:    #fab387;
+  }
+
+  /* Gruvbox Dark */
+  [data-theme="gruvbox"] {
+    --bg:        #282828;
+    --bg-elev:   #1d2021;
+    --bg-soft:   #32302f;
+    --panel:     #3c3836;
+    --border:    #504945;
+    --border-hi: #665c54;
+    --fg:        #ebdbb2;
+    --fg-dim:    #d5c4a1;
+    --fg-mute:   #a89984;
+    --fg-faint:  #665c54;
+    --accent:    #fabd2f;
+    --accent-2:  #d3869b;
+    --success:   #b8bb26;
+    --warn:      #fe8019;
+    --danger:    #fb4934;
+    --cyan:      #8ec07c;
+    --orange:    #fe8019;
+  }
+
+  /* Ubuntu (aubergine + orange) */
+  [data-theme="ubuntu"] {
+    --bg:        #2c001e;
+    --bg-elev:   #1f0015;
+    --bg-soft:   #3a0026;
+    --panel:     #300020;
+    --border:    #5a1d48;
+    --border-hi: #77216f;
+    --fg:        #f7f7f7;
+    --fg-dim:    #d9d9d9;
+    --fg-mute:   #aea79f;
+    --fg-faint:  #6b5b6b;
+    --accent:    #e95420;
+    --accent-2:  #dd4814;
+    --success:   #a6d98e;
+    --warn:      #f9c784;
+    --danger:    #ef6c6c;
+    --cyan:      #9cd3e3;
+    --orange:    #e95420;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
+    overscroll-behavior: none;
+    background: #0a0a0f;
+    color: var(--fg);
+    font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    font-feature-settings: "calt","liga","ss01","ss02";
+    -webkit-font-smoothing: antialiased;
+  }
+  html { position: fixed; inset: 0; width: 100%; }
+  body {
+    /* faux hyprland desktop wallpaper */
+    background:
+      radial-gradient(1100px 600px at 15% 10%, rgba(122,162,247,.10), transparent 60%),
+      radial-gradient(900px 700px at 85% 90%, rgba(187,154,247,.08), transparent 60%),
+      radial-gradient(600px 500px at 50% 50%, rgba(125,207,255,.04), transparent 70%),
+      #05050a;
+    padding: 24px;
+    /* key: body is a grid cell that hosts the app, fills the viewport exactly */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  @media (max-height: 760px) { body { padding: 8px; } }
+  @media (max-height: 520px), (max-width: 520px) { body { padding: 0; } }
+
+  #root {
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  /* scrollbars */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-hi); }
+
+  /* utility */
+  .kbd {
+    display: inline-grid;
+    place-items: center;
+    min-width: 18px;
+    height: 20px;
+    padding: 0 6px;
+    background: var(--bg-soft);
+    color: var(--fg-dim);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    font: 500 11px/1 "JetBrains Mono", monospace;
+  }
+
+  /* selection */
+  ::selection { background: color-mix(in oklab, var(--accent) 40%, transparent); color: var(--fg); }
+
+  @keyframes caret { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
+  .caret { animation: caret 1.1s steps(1) infinite; }
+
+  @keyframes fadein { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+    // TWEAK DEFAULTS (editable via Tweaks toolbar)
+    window.__TWEAKS = /*EDITMODE-BEGIN*/{
+      "theme": "tokyonight"
+    }/*EDITMODE-END*/;
+  </script>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="src/data.jsx"></script>
+  <script type="text/babel" src="src/icons.jsx"></script>
+  <script type="text/babel" src="src/palette.jsx"></script>
+  <script type="text/babel" src="src/sync-core.jsx"></script>
+  <script type="text/babel" src="src/sync-dialog.jsx"></script>
+  <script type="text/babel" src="src/app.jsx"></script>
+  <script type="text/babel" src="src/tweaks.jsx"></script>
+  <script type="text/babel" src="src/boot.jsx"></script>
+</body>
+</html>

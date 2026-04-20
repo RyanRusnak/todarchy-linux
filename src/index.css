@@ -1,0 +1,119 @@
+/* Fallback theme tokens — Tokyo Night defaults, used until the Omarchy
+   theme loads (or as the full palette when running outside Omarchy). The
+   Rust theme watcher emits a subset of these via useOmarchyTheme; the rest
+   stay at these defaults. */
+:root {
+  /* backgrounds */
+  --bg:         #1a1b26;
+  --bg-elev:    #16171f;
+  --bg-soft:    #1f2030;
+  --bg-panel:   #1f2335;
+  --panel:      #1f2335;
+  --border:     #2a2e42;
+  --border-hi:  #3b4261;
+
+  /* foregrounds */
+  --fg:         #c0caf5;
+  --fg-dim:     #9aa5ce;
+  --fg-mute:    #565f89;
+  --fg-faint:   #3b4261;
+
+  /* accents */
+  --accent:     #7aa2f7;
+  --accent-2:   #bb9af7;
+  --success:    #9ece6a;
+  --warn:       #e0af68;
+  --danger:     #f7768e;
+  --cyan:       #7dcfff;
+  --orange:     #ff9e64;
+
+  /* context tokens (used when Omarchy drives the palette) */
+  --ctx-home:    var(--cyan);
+  --ctx-work:    var(--warn);
+  --ctx-errands: var(--accent-2);
+  --ctx-read:    var(--accent);
+
+  /* chrome */
+  --shadow: 0 30px 80px rgba(0,0,0,.55), 0 4px 14px rgba(0,0,0,.35);
+  --radius: 10px;
+  --border-w: 2px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  background:
+    radial-gradient(1100px 600px at 15% 10%, color-mix(in oklab, var(--accent) 10%, transparent), transparent 60%),
+    radial-gradient(900px 700px at 85% 90%, color-mix(in oklab, var(--accent-2) 8%, transparent), transparent 60%),
+    radial-gradient(600px 500px at 50% 50%, color-mix(in oklab, var(--cyan) 4%, transparent), transparent 70%),
+    #05050a;
+  color: var(--fg);
+  font-family: 'JetBrainsMono Nerd Font', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  font-feature-settings: "calt","liga","ss01","ss02";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  overscroll-behavior: none;
+  padding: 24px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+@media (max-height: 760px) { body { padding: 8px; } }
+@media (max-height: 520px), (max-width: 520px) { body { padding: 0; } }
+
+#root {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-hi); }
+
+::selection {
+  background: color-mix(in oklab, var(--accent) 40%, transparent);
+  color: var(--fg);
+}
+
+.kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 20px;
+  padding: 0 6px;
+  background: var(--bg-soft);
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font: 500 11px/1 'JetBrains Mono', monospace;
+}
+
+@keyframes caret { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
+.caret { animation: caret 1.1s steps(1) infinite; }
+
+@keyframes fadein { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }

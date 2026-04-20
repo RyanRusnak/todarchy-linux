@@ -1,0 +1,11 @@
+// Waybar custom/todarchy module — merge into ~/.config/waybar/config
+//
+// Add "custom/todarchy" into your modules-right array, then:
+
+"custom/todarchy": {
+  "exec": "todarchy-waybar",
+  "interval": 30,
+  "return-type": "json",
+  "on-click": "todarchy-gui",
+  "tooltip": true
+}
