@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
@@ -238,32 +238,32 @@ pub async fn spawn_watcher(app: AppHandle) -> Result<()> {
     watcher.watch(&watch_dir, RecursiveMode::NonRecursive)?;
     tracing::info!("watching omarchy current dir: {}", watch_dir.display());
 
-    // Trailing-edge debounce. `omarchy-theme-set` fires a burst of events over
-    // ~300-500ms (rm next-theme, mkdir, cp, rm theme, mv, echo theme.name).
-    // We want to read AFTER that flurry lands, not during it — otherwise we
-    // see the pre-swap state and the real swap gets silently coalesced into a
-    // leading-edge debounce window. So: when an event arrives, wait for the
-    // channel to go quiet for QUIET_MS before reading; every subsequent event
-    // during the wait resets the timer.
-    const QUIET_MS: u64 = 250;
-
-    while let Some(first) = rx.recv().await {
-        if !is_relevant(&first) { continue; }
-
-        // Drain additional events until the channel is silent for QUIET_MS.
-        loop {
-            match tokio::time::timeout(
-                Duration::from_millis(QUIET_MS),
-                rx.recv(),
-            ).await {
-                Ok(Some(ev)) => {
-                    // More activity — keep waiting. Surface watcher errors.
-                    if let Err(e) = ev { tracing::warn!("watcher error: {e}"); }
-                }
-                Ok(None) => return Ok(()), // channel closed
-                Err(_) => break,            // quiet — the swap is done
+    // Fire on writes to `theme.name`. `omarchy-theme-set` writes that file as
+    // the LAST step of the swap (after rm/mkdir/cp/mv), so by the time we see
+    // it we're guaranteed `current/theme/alacritty.toml` already holds the
+    // new palette. A time-based debouncer was flakey: `cp`+`sed`-templates
+    // can take longer than any fixed quiet window, so we'd read the old
+    // theme while the swap was still in flight and silently drop the real
+    // burst. Keying off the guaranteed-last write removes the race entirely.
+    while let Some(ev) = rx.recv().await {
+        let e = match ev {
+            Ok(e) => e,
+            Err(err) => {
+                tracing::warn!("watcher error: {err}");
+                continue;
             }
-        }
+        };
+
+        let touches_theme_name = e.paths.iter().any(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n == "theme.name")
+                .unwrap_or(false)
+        });
+        if !touches_theme_name { continue; }
+
+        // Tiny settle so the preceding `mv` of theme/ has flushed to fs cache.
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         match read_current() {
             Ok(tokens) => {
@@ -275,16 +275,6 @@ pub async fn spawn_watcher(app: AppHandle) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn is_relevant(ev: &notify::Result<Event>) -> bool {
-    matches!(
-        ev,
-        Ok(e) if matches!(
-            e.kind,
-            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-        )
-    )
 }
 
 // ---------- Color utilities ----------
