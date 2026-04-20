@@ -1,62 +1,45 @@
-// sync.rs — end-to-end encrypted sync.
+// sync.rs — Tauri commands for the v0.2 folder-sync setting.
 //
-// See docs/SYNC.md for the full protocol. This module exposes the Tauri
-// commands the frontend dialog needs:
+// The user picks a filesystem path (typically one the OS syncs across
+// devices — iCloud Drive, Dropbox, Syncthing, etc.) and todarchy mirrors
+// its Automerge store there on every save. The sync_watcher module
+// picks up external writes (another device pushing edits) and merges
+// them into the local doc live.
 //
-//   enroll(username, passphrase)        → { device_id, recovery_phrase }
-//   sign_in(username, passphrase)       → { device_id }
-//   recover_from_phrase(phrase, new_pp) → { device_id }
-//   push(blob)                          → server_rev
-//   pull(since_rev)                     → Vec<blob>
-//
-// Crypto:
-//   KDF       Argon2id(passphrase, salt=username, 256MB/3/4)
-//   Identity  age X25519 derived from KDF output
-//   Payload   age encrypt to self-identity (XChaCha20-Poly1305)
-//   Recovery  BIP39 24-word encoding of the raw KDF key, shown once
-//
-// The relay server is dumb: it stores ciphertext blobs keyed by
-// (user_bucket_hash, rev). It NEVER sees the passphrase or plaintext.
-//
-// NOTE: this file is a scaffold. The real implementations are marked TODO
-// and referenced in docs/SYNC.md. Claude Code: land them in this order:
-//   1. derive_key() — Argon2id over passphrase+username
-//   2. enroll() — generates recovery phrase, writes sync.age
-//   3. push/pull against the relay (docs/RELAY.md has endpoints)
+// The older age / BIP39 / relay-server design is gone; v0.2 reuses the
+// file sync the user already has configured on their OS.
 
-use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct EnrollResult {
-    pub device_id: String,
-    pub recovery_phrase: String, // 24 words, shown exactly once
+use crate::config;
+
+#[tauri::command]
+pub fn get_sync_folder() -> Result<String, String> {
+    config::load()
+        .map(|c| c.sync_folder)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn enroll(_username: String, _passphrase: String) -> Result<EnrollResult, String> {
-    // TODO: derive key, persist sync.age, generate BIP39 phrase
-    Err("not implemented — see docs/SYNC.md".into())
+pub async fn set_sync_folder(app: AppHandle, folder: String) -> Result<(), String> {
+    let mut cfg = config::load().map_err(|e| e.to_string())?;
+    cfg.sync_folder = folder.trim().to_string();
+    config::save(&cfg).map_err(|e| e.to_string())?;
+
+    // Seed the new folder with current state, or merge+converge if the
+    // folder already had a tasks.automerge from another device.
+    if let Ok(json) = crate::store::load(&app).await {
+        let _ = crate::store::save(&app, json.clone()).await;
+        let _ = app.emit("tasks-changed", &json);
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn sign_in(_username: String, _passphrase: String) -> Result<String, String> {
-    Err("not implemented".into())
-}
-
-#[tauri::command]
-pub async fn recover_from_phrase(
-    _phrase: String,
-    _new_passphrase: String,
-) -> Result<String, String> {
-    Err("not implemented".into())
-}
-
-#[tauri::command]
-pub async fn push(_blob: Vec<u8>) -> Result<u64, String> {
-    Err("not implemented".into())
-}
-
-#[tauri::command]
-pub async fn pull(_since_rev: u64) -> Result<Vec<Vec<u8>>, String> {
-    Err("not implemented".into())
+pub async fn clear_sync_folder(app: AppHandle) -> Result<(), String> {
+    let mut cfg = config::load().map_err(|e| e.to_string())?;
+    cfg.sync_folder = String::new();
+    config::save(&cfg).map_err(|e| e.to_string())?;
+    let _ = app.emit("tasks-changed", serde_json::Value::Null);
+    Ok(())
 }

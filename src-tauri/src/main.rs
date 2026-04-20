@@ -12,8 +12,10 @@
 mod theme;
 mod store;
 mod sync;
+mod sync_watcher;
 mod notify;
 mod doc;
+mod config;
 
 use tauri::AppHandle;
 
@@ -25,6 +27,16 @@ async fn load_tasks(app: AppHandle) -> Result<serde_json::Value, String> {
 #[tauri::command]
 async fn save_tasks(app: AppHandle, tasks: serde_json::Value) -> Result<(), String> {
     store::save(&app, tasks).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_tasks(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
+    store::delete_many(&app, "tasks", &ids).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_projects(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
+    store::delete_many(&app, "projects", &ids).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -59,17 +71,25 @@ fn main() {
                 notify::run_loop(handle2).await;
             });
 
+            // Watch the configured sync folder for another device's writes,
+            // merge them into the local doc, and push a `tasks-changed`
+            // event to the frontend. Noop when no sync folder is set.
+            let handle3 = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                sync_watcher::run_loop(handle3).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             load_tasks,
             save_tasks,
+            delete_tasks,
+            delete_projects,
             current_theme,
-            sync::enroll,
-            sync::sign_in,
-            sync::recover_from_phrase,
-            sync::push,
-            sync::pull,
+            sync::get_sync_folder,
+            sync::set_sync_folder,
+            sync::clear_sync_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

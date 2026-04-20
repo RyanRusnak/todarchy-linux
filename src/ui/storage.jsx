@@ -10,6 +10,19 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
+/** Explicit delete — used by the GUI so sync peers see a real tombstone
+ *  instead of inferring "absence = delete" in the next save_tasks payload
+ *  (which would wipe another device's concurrent inserts). */
+export async function deleteIdsInStore(rootKey, ids) {
+  if (!ids || ids.length === 0) return;
+  const cmd = rootKey === 'projects' ? 'delete_projects' : 'delete_tasks';
+  try {
+    await invoke(cmd, { ids });
+  } catch (e) {
+    console.error(`${cmd} failed:`, e);
+  }
+}
+
 export async function loadStore() {
   try {
     const data = await invoke('load_tasks');

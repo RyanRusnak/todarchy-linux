@@ -11,7 +11,9 @@ import { Icon } from './icons.jsx';
 import { Palette } from './palette.jsx';
 import { useSync, makeSyncCommand } from './sync-stub.jsx';
 import { useOmarchyTheme } from '../theme/useOmarchyTheme';
-import { loadStore, saveStore } from './storage.jsx';
+import { loadStore, saveStore, deleteIdsInStore } from './storage.jsx';
+import { pickSyncFolder, clearSyncFolder, getSyncFolder } from './sync-commands.jsx';
+import { listen as tauriListen } from '@tauri-apps/api/event';
 import {
   LISTS,
   CONTEXTS,
@@ -90,6 +92,13 @@ function toInputTime(ts) {
   const d = new Date(ts);
   const p = n => String(n).padStart(2,"0");
   return p(d.getHours())+":"+p(d.getMinutes());
+}
+
+// Collapse a long absolute path down to something that fits in a palette hint.
+function shortenPath(p) {
+  if (!p) return '';
+  if (p.length <= 40) return p;
+  return '…' + p.slice(-39);
 }
 
 function App() {
@@ -229,6 +238,29 @@ function App() {
     if (!bootDone.current) return;
     saveStore({ tasks, projects, contexts });
   }, [tasks, projects, contexts]);
+
+  // Sync folder — reflect the configured value in the UI and listen for
+  // external merges pushed by the Rust sync watcher. When another device
+  // writes tasks.automerge into our sync folder, the backend merges it
+  // into the local doc and emits `tasks-changed` with the new state.
+  const [syncFolder, setSyncFolder] = aUseState('');
+  aUseEffect(() => {
+    getSyncFolder().then(setSyncFolder);
+    let unlisten;
+    tauriListen('tasks-changed', (event) => {
+      const payload = event?.payload;
+      if (!payload || typeof payload !== 'object') return;
+      if (Array.isArray(payload.tasks)) setTasks(payload.tasks);
+      if (Array.isArray(payload.projects)) setProjects(payload.projects);
+      if (Array.isArray(payload.contexts) && payload.contexts.length) {
+        setContexts(payload.contexts);
+      }
+      // Re-query the folder in case the event was triggered by a
+      // set_/clear_sync_folder command.
+      getSyncFolder().then(setSyncFolder);
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, []);
 
   const normalizeCtx = (s) => {
     s = (s||"").trim().toLowerCase().replace(/\s+/g, "-");
@@ -454,6 +486,9 @@ function App() {
       .filter(t => t.id !== id)
       .map(t => t.parent === id ? { ...t, parent: newParent } : t)
     );
+    // Explicit delete through the backend — save_tasks is upsert-only so
+    // sync peers never see a silent tombstone caused by an absent id.
+    deleteIdsInStore('tasks', [id]);
     flashToast("deleted");
   };
 
@@ -594,6 +629,7 @@ function App() {
     pushUndo(tasks);
     setTasks(ts => ts.map(t => t.list === id ? { ...t, list: "inbox" } : t));
     setProjects(ps => ps.filter(x => x.id !== id));
+    deleteIdsInStore('projects', [id]);
     if (activeList === id) setActiveList("inbox");
     flashToast("project deleted");
   };
@@ -645,9 +681,27 @@ function App() {
         // or `omarchy-theme-set <name>`; the watcher handles the rest.
         flashToast("open the Omarchy menu or run `omarchy-theme-set \"Tokyo Night\"`");
       } },
-      { id: "clear-done",  title: "clear completed (hard delete)", run: () => { pushUndo(tasks); setTasks(ts => ts.filter(t => !t.doneAt)); flashToast("cleared done"); } },
+      { id: "sync-pick", title: syncFolder ? "sync: change folder…" : "sync: choose a folder…",
+        hint: syncFolder ? shortenPath(syncFolder) : "iCloud / Dropbox / Syncthing",
+        run: () => pickSyncFolder(flashToast) },
+      ...(syncFolder ? [{
+        id: "sync-clear",
+        title: "sync: turn off (go local-only)",
+        hint: shortenPath(syncFolder),
+        run: () => clearSyncFolder(flashToast),
+      }] : []),
+      { id: "sync-status", title: syncFolder ? `sync: on — ${shortenPath(syncFolder)}` : "sync: off (local only)",
+        hint: "info",
+        run: () => flashToast(syncFolder ? `syncing to ${syncFolder}` : "no sync folder set") },
+      { id: "clear-done",  title: "clear completed (hard delete)", run: () => {
+        pushUndo(tasks);
+        const doneIds = tasks.filter(t => t.doneAt).map(t => t.id);
+        setTasks(ts => ts.filter(t => !t.doneAt));
+        if (doneIds.length) deleteIdsInStore('tasks', doneIds);
+        flashToast("cleared done");
+      } },
     ];
-  }, [currentTask, tasks, activeList, projects, showDone, showDeferred, showDetail, contexts, sync.account]);
+  }, [currentTask, tasks, activeList, projects, showDone, showDeferred, showDetail, contexts, sync.account, syncFolder]);
 
   const openQuickAdd = () => { setQuickAdd(true); setQuickAddVal(""); setMode("INSERT"); };
   const closeQuickAdd = () => { setQuickAdd(false); setQuickAddVal(""); setMode("NORMAL"); };
