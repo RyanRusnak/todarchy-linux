@@ -254,20 +254,34 @@ pub async fn spawn_watcher(app: AppHandle) -> Result<()> {
             }
         };
 
+        // Verbose dump so we can diagnose "app lags one theme behind"-type
+        // reports. Set RUST_LOG=info when launching todarchy to see this.
+        tracing::info!(
+            "notify event kind={:?} paths={:?}",
+            e.kind,
+            e.paths
+        );
+
         let touches_theme_name = e.paths.iter().any(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
                 .map(|n| n == "theme.name")
                 .unwrap_or(false)
         });
-        if !touches_theme_name { continue; }
+        if !touches_theme_name {
+            tracing::debug!("skipping — no theme.name in paths");
+            continue;
+        }
 
         // Tiny settle so the preceding `mv` of theme/ has flushed to fs cache.
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         match read_current() {
             Ok(tokens) => {
-                tracing::info!("theme changed → {}", tokens.name);
+                tracing::info!(
+                    "theme changed → name={} bg={} accent={}",
+                    tokens.name, tokens.bg, tokens.accent
+                );
                 let _ = app.emit("theme-changed", &tokens);
             }
             Err(err) => tracing::warn!("theme reload failed: {err}"),

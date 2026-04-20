@@ -13,6 +13,7 @@ mod theme;
 mod store;
 mod sync;
 mod notify;
+mod doc;
 
 use tauri::AppHandle;
 
