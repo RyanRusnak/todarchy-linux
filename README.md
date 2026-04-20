@@ -1,8 +1,9 @@
 # todarchy-linux
 
 Keyboard-first, terminal-inspired task manager for **Omarchy** (Arch + Hyprland).
-Adopts your active Omarchy theme automatically — switch themes with
-`omarchy-theme-next` and the app re-colors live.
+Adopts your active Omarchy theme automatically — pick a theme from the
+Omarchy menu (or run `omarchy-theme-set "Tokyo Night"`) and the app
+re-colors live.
 
 This is the Linux build; a mobile and web version are planned as separate
 repos. The binary is called `todarchy`, the CLI is `tod`, and the Waybar

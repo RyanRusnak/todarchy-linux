@@ -2,8 +2,8 @@
 // paints the tokens onto CSS custom properties on :root.
 //
 // The Rust side (src-tauri/src/theme.rs) emits this on startup and whenever
-// the ~/.config/omarchy/current/theme symlink or its contents change
-// (i.e. when the user runs `omarchy-theme-next` or `omarchy-theme-set`).
+// the ~/.config/omarchy/current/theme directory is swapped out
+// (i.e. when the user runs `omarchy-theme-set` or picks from the menu).
 //
 // Components should NEVER read the hex values from JS — always use the CSS
 // variables (e.g. `color: var(--accent)`). The JS tokens are provided only

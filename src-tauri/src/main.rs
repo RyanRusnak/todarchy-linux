@@ -45,7 +45,7 @@ fn main() {
             let handle = app.handle().clone();
 
             // Kick off the Omarchy theme watcher. Emits `theme-changed`
-            // to the frontend whenever the user runs `omarchy-theme-next`.
+            // to the frontend whenever the user runs `omarchy-theme-set`.
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = theme::spawn_watcher(handle).await {
                     tracing::error!("theme watcher failed: {e}");

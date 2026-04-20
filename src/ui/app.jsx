@@ -640,10 +640,10 @@ function App() {
       { id: "ctx-clear", title: "clear context", run: () => currentTask && updateTask(currentTask.id, { ctx: "" }) },
       { id: "ctx-manage", title: "manage contexts…", hint: "add / rename / delete", run: () => setCtxEditor(true) },
       { id: "toggle-detail", title: showDetail ? "hide detail pane" : "show detail pane", hint: "inspect", keys: ["i"], run: () => setShowDetail(v => !v) },
-      { id: "theme-next", title: "theme: next (omarchy-theme-next)", hint: "runs in a shell", run: () => {
-        // The Omarchy theme is the source of truth — ask the user to use their
-        // normal keybind or menu. The Rust watcher picks the change up live.
-        flashToast("run `omarchy-theme-next` in any terminal");
+      { id: "theme-menu", title: "theme: pick one in Omarchy", hint: "the Rust watcher picks it up live", run: () => {
+        // The Omarchy theme is the source of truth — point users at the menu
+        // or `omarchy-theme-set <name>`; the watcher handles the rest.
+        flashToast("open the Omarchy menu or run `omarchy-theme-set \"Tokyo Night\"`");
       } },
       { id: "clear-done",  title: "clear completed (hard delete)", run: () => { pushUndo(tasks); setTasks(ts => ts.filter(t => !t.doneAt)); flashToast("cleared done"); } },
     ];
