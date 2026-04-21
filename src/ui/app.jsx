@@ -9,7 +9,6 @@ import {
 } from 'react';
 import { Icon } from './icons.jsx';
 import { Palette } from './palette.jsx';
-import { useSync, makeSyncCommand } from './sync-stub.jsx';
 import { useOmarchyTheme } from '../theme/useOmarchyTheme';
 import { loadStore, saveStore, deleteIdsInStore } from './storage.jsx';
 import { pickSyncFolder, clearSyncFolder, getSyncFolder } from './sync-commands.jsx';
@@ -192,7 +191,10 @@ function App() {
   const [ctxEditor, setCtxEditor] = aUseState(false);
 
   // sync (E2EE — stubbed for v0.1; see src/ui/sync-stub.jsx)
-  const sync = useSync();
+  // Legacy sync-stub object retained only so the existing StatusBar +
+  // flash-message bindings below keep compiling. Real sync now lives in
+  // ./sync-commands.jsx and the Rust side.
+  const sync = { account: null, openSync: () => {}, flashMsg: '' };
   const [showDetail, setShowDetail] = aUseState(() => {
     const v = localStorage.getItem("gtd.showDetail");
     return v === null ? true : v === "1";
@@ -643,7 +645,8 @@ function App() {
     return [
       { id: "go-inbox", title: "go to inbox", hint: "1", keys: ["g","i"], run: () => setActiveList("inbox") },
       ...projectCommands,
-      makeSyncCommand(sync.account, sync.openSync),
+      // Real sync entries live further down ("sync: choose a folder…" etc.)
+      // — the sync-stub placeholder is gone now that folder sync shipped.
       { id: "project-manage", title: "manage projects…", hint: "add / rename / delete", keys: ["g","n"], run: () => { setProjEditorFocus("add"); setProjEditor(true); } },
       { id: "project-edit-current", title: "edit current project…", run: () => {
         if (activeList === "inbox") { flashToast("inbox can't be edited"); return; }
