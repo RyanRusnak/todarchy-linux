@@ -150,7 +150,7 @@ async fn apply_sync_update(app: &AppHandle) -> Result<()> {
         }
 
         local.save(&local_path)?;
-        local.save(&sync_path)?;
+        local.save_overwrite(&sync_path)?;
 
         let json = local.to_json();
         let _ = app.emit("tasks-changed", &json);

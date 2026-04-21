@@ -92,8 +92,9 @@ impl TaskDoc {
         self.doc.save()
     }
 
-    /// Atomic write: serialize to `<path>.tmp`, then rename. The sync daemon
-    /// (iCloud, Dropbox, Syncthing) must never observe a half-written file.
+    /// Atomic write: serialize to `<path>.tmp`, then rename. Used for the
+    /// private local store where we want crash-safety; a power-off
+    /// mid-write leaves either the old doc or the new one intact.
     pub fn save(&mut self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
@@ -105,7 +106,30 @@ impl TaskDoc {
         std::fs::rename(&tmp, path)
             .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
         tracing::info!(
-            "wrote automerge doc: path={} bytes={}",
+            "wrote automerge doc (atomic): path={} bytes={}",
+            path.display(),
+            bytes.len()
+        );
+        Ok(())
+    }
+
+    /// Direct overwrite, no sibling `.tmp` + rename. Used for the sync-
+    /// folder copy because some sync daemons (the Linux Dropbox client
+    /// in particular) handle the rename IN event poorly: they upload
+    /// the `.tmp` file and then don't re-upload the rename target,
+    /// leaving peers looking at stale content. `std::fs::write` opens
+    /// with TRUNC so there's a tiny window where a reader sees an
+    /// empty or partial file — in practice Automerge parse just fails
+    /// and the reading device retries on the next notify event.
+    pub fn save_overwrite(&mut self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let bytes = self.doc.save();
+        std::fs::write(path, &bytes)
+            .with_context(|| format!("writing {}", path.display()))?;
+        tracing::info!(
+            "wrote automerge doc (direct): path={} bytes={}",
             path.display(),
             bytes.len()
         );

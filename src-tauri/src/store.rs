@@ -69,7 +69,7 @@ pub async fn load(app: &AppHandle) -> Result<Value> {
         if let Err(e) = doc.save(&local_path) {
             step_error.get_or_insert_with(|| format!("save local: {e}"));
         }
-        if let Err(e) = doc.save(&sync_path) {
+        if let Err(e) = doc.save_overwrite(&sync_path) {
             step_error.get_or_insert_with(|| format!("save to sync folder: {e}"));
         }
 
@@ -125,7 +125,7 @@ pub async fn save(app: &AppHandle, data: Value) -> Result<()> {
     doc.apply_json(&data)?;
     doc.save(&local_path)?;
     if let Some(ref sp) = sync_path {
-        if let Err(e) = doc.save(sp) {
+        if let Err(e) = doc.save_overwrite(sp) {
             sync_error.get_or_insert_with(|| format!("save to sync folder: {e}"));
         }
     }
@@ -172,7 +172,7 @@ pub async fn delete_many(app: &AppHandle, root_key: &str, ids: &[String]) -> Res
     }
     doc.save(&local_path)?;
     if let Some(ref sp) = sync_path {
-        if let Err(e) = doc.save(sp) {
+        if let Err(e) = doc.save_overwrite(sp) {
             sync_error.get_or_insert_with(|| format!("save to sync folder: {e}"));
         }
     }
