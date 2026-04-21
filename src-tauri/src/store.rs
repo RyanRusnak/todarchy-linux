@@ -45,23 +45,38 @@ fn tasks_json_path() -> Result<PathBuf> {
 ///      this picks up edits another device made while we were offline.
 ///   3. Write the merged doc back to disk so the two sources stay in lockstep.
 ///   4. Return the JSON projection the frontend consumes.
-pub async fn load(_app: &AppHandle) -> Result<Value> {
+pub async fn load(app: &AppHandle) -> Result<Value> {
     let local_path = automerge_path()?;
     let mut doc = TaskDoc::load(&local_path)?;
 
-    // Fold in whatever the sync folder has (if configured).
+    // Fold in whatever the sync folder has (if configured). Every branch
+    // reports to the `sync-status` event so the UI reflects reality.
     if let Some(sync_path) = crate::config::sync_doc_path()? {
+        let mut step_error: Option<String> = None;
+
         if sync_path.exists() {
-            if let Ok(mut remote) = TaskDoc::load(&sync_path) {
-                if let Err(e) = doc.merge(&mut remote) {
-                    tracing::warn!("merge from sync folder failed: {e}");
+            match TaskDoc::load(&sync_path) {
+                Ok(mut remote) => {
+                    if let Err(e) = doc.merge(&mut remote) {
+                        step_error = Some(format!("merge: {e}"));
+                    }
                 }
+                Err(e) => step_error = Some(format!("load remote: {e}")),
             }
         }
         // Whether or not merge happened, write back to both locations so they
         // converge: we may have had local-only edits that need to propagate.
-        let _ = doc.save(&local_path);
-        let _ = doc.save(&sync_path);
+        if let Err(e) = doc.save(&local_path) {
+            step_error.get_or_insert_with(|| format!("save local: {e}"));
+        }
+        if let Err(e) = doc.save(&sync_path) {
+            step_error.get_or_insert_with(|| format!("save to sync folder: {e}"));
+        }
+
+        match step_error {
+            Some(reason) => crate::sync::record_error(app, reason),
+            None => crate::sync::record_success(app),
+        }
     } else {
         // First run: if tasks.automerge doesn't exist yet but a legacy
         // tasks.json does, migrate by seeding the doc from JSON. After this
@@ -85,46 +100,69 @@ pub async fn load(_app: &AppHandle) -> Result<Value> {
 /// Save a full-state JSON payload. Applies the diff into the local Automerge
 /// doc, persists it, regenerates tasks.json, and mirrors to the sync folder
 /// if configured.
-pub async fn save(_app: &AppHandle, data: Value) -> Result<()> {
+pub async fn save(app: &AppHandle, data: Value) -> Result<()> {
     let local_path = automerge_path()?;
     let mut doc = TaskDoc::load(&local_path)?;
 
+    let sync_path = crate::config::sync_doc_path()?;
+    let mut sync_error: Option<String> = None;
+
     // Always merge the sync-folder copy first so we never stomp another
     // device's concurrent edits.
-    if let Some(sync_path) = crate::config::sync_doc_path()? {
-        if sync_path.exists() {
-            if let Ok(mut remote) = TaskDoc::load(&sync_path) {
-                let _ = doc.merge(&mut remote);
+    if let Some(ref sp) = sync_path {
+        if sp.exists() {
+            match TaskDoc::load(sp) {
+                Ok(mut remote) => {
+                    if let Err(e) = doc.merge(&mut remote) {
+                        sync_error = Some(format!("merge: {e}"));
+                    }
+                }
+                Err(e) => sync_error = Some(format!("load remote: {e}")),
             }
         }
     }
 
     doc.apply_json(&data)?;
     doc.save(&local_path)?;
-    if let Some(sync_path) = crate::config::sync_doc_path()? {
-        let _ = doc.save(&sync_path);
+    if let Some(ref sp) = sync_path {
+        if let Err(e) = doc.save(sp) {
+            sync_error.get_or_insert_with(|| format!("save to sync folder: {e}"));
+        }
     }
 
     // Regenerate the JSON view from the merged doc so CLI/Waybar see the
     // same state the GUI sees.
     write_json_view(&doc.to_json()).await?;
+
+    // Report status — only if a sync folder is configured.
+    if sync_path.is_some() {
+        match sync_error {
+            Some(reason) => crate::sync::record_error(app, reason),
+            None => crate::sync::record_success(app),
+        }
+    }
     Ok(())
 }
 
 /// Explicit deletions. Called by the frontend whenever the user actually
 /// intends to delete a task/project — unlike `save`, which is upsert-only
 /// so concurrent inserts from other devices aren't silently wiped.
-pub async fn delete_many(_app: &AppHandle, root_key: &str, ids: &[String]) -> Result<()> {
+pub async fn delete_many(app: &AppHandle, root_key: &str, ids: &[String]) -> Result<()> {
     let local_path = automerge_path()?;
     let mut doc = TaskDoc::load(&local_path)?;
 
-    // Fold in remote state first so the delete persists even if another
-    // device also edited the same id concurrently (Automerge tombstones
-    // win over concurrent edits).
-    if let Some(sync_path) = crate::config::sync_doc_path()? {
-        if sync_path.exists() {
-            if let Ok(mut remote) = TaskDoc::load(&sync_path) {
-                let _ = doc.merge(&mut remote);
+    let sync_path = crate::config::sync_doc_path()?;
+    let mut sync_error: Option<String> = None;
+
+    if let Some(ref sp) = sync_path {
+        if sp.exists() {
+            match TaskDoc::load(sp) {
+                Ok(mut remote) => {
+                    if let Err(e) = doc.merge(&mut remote) {
+                        sync_error = Some(format!("merge: {e}"));
+                    }
+                }
+                Err(e) => sync_error = Some(format!("load remote: {e}")),
             }
         }
     }
@@ -133,10 +171,19 @@ pub async fn delete_many(_app: &AppHandle, root_key: &str, ids: &[String]) -> Re
         doc.delete(root_key, id)?;
     }
     doc.save(&local_path)?;
-    if let Some(sync_path) = crate::config::sync_doc_path()? {
-        let _ = doc.save(&sync_path);
+    if let Some(ref sp) = sync_path {
+        if let Err(e) = doc.save(sp) {
+            sync_error.get_or_insert_with(|| format!("save to sync folder: {e}"));
+        }
     }
     write_json_view(&doc.to_json()).await?;
+
+    if sync_path.is_some() {
+        match sync_error {
+            Some(reason) => crate::sync::record_error(app, reason),
+            None => crate::sync::record_success(app),
+        }
+    }
     Ok(())
 }
 

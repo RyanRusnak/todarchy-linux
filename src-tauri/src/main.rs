@@ -90,6 +90,7 @@ fn main() {
             sync::get_sync_folder,
             sync::set_sync_folder,
             sync::clear_sync_folder,
+            sync::get_sync_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -16,6 +16,19 @@ export async function getSyncFolder() {
   }
 }
 
+/** Fetch the full status shape: { folder, last_synced_at, last_sync_error }.
+ *  Use this once on app mount; thereafter rely on the `sync-status` event
+ *  which the backend emits whenever load / save / watcher runs. */
+export async function getSyncStatus() {
+  try {
+    const s = await invoke('get_sync_status');
+    return s && typeof s === 'object' ? s : { folder: '', last_synced_at: null, last_sync_error: null };
+  } catch (e) {
+    console.warn('get_sync_status failed:', e);
+    return { folder: '', last_synced_at: null, last_sync_error: null };
+  }
+}
+
 export async function pickSyncFolder(flash) {
   try {
     const selected = await openDialog({

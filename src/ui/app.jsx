@@ -11,7 +11,7 @@ import { Icon } from './icons.jsx';
 import { Palette } from './palette.jsx';
 import { useOmarchyTheme } from '../theme/useOmarchyTheme';
 import { loadStore, saveStore, deleteIdsInStore } from './storage.jsx';
-import { pickSyncFolder, clearSyncFolder, getSyncFolder } from './sync-commands.jsx';
+import { pickSyncFolder, clearSyncFolder, getSyncFolder, getSyncStatus } from './sync-commands.jsx';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 import {
   LISTS,
@@ -27,38 +27,75 @@ import {
   formatDeferUntil,
 } from './data.jsx';
 
-// Small inline sync indicator for the status bar. Shows "local" in v0.1 since
-// end-to-end encrypted sync isn't wired to a relay yet. The `account` prop
-// will drive the synced/unsynced visual once sync-stub.jsx is replaced.
-function SyncDot({ account, onClick, labelled = false }) {
-  const synced = !!account;
-  const color = synced ? 'var(--success)' : 'var(--fg-faint)';
+// Sync status indicator for the status bar. Three visual states:
+//   - local   — no sync folder configured
+//   - synced  — folder configured + last sync succeeded (shows "Xm ago")
+//   - error   — folder configured + last sync failed (shows reason on hover)
+function SyncDot({ status, onClick, labelled = false }) {
+  const folder = status?.folder || '';
+  const lastSync = status?.last_synced_at ?? null;
+  const error = status?.last_sync_error || null;
+
+  let label = 'local';
+  let tone = 'idle';
+  let tip = 'local only — click to pick a sync folder';
+  if (folder) {
+    if (error) {
+      label = 'sync err';
+      tone = 'error';
+      tip = `sync error: ${error}\nfolder: ${folder}`;
+    } else if (lastSync) {
+      label = `synced · ${timeAgoShort(lastSync)}`;
+      tone = 'ok';
+      tip = `last sync: ${new Date(lastSync).toLocaleString()}\nfolder: ${folder}`;
+    } else {
+      label = 'pending';
+      tone = 'pending';
+      tip = `sync folder set but no successful sync yet\nfolder: ${folder}`;
+    }
+  }
+
+  const color = tone === 'ok' ? 'var(--success)'
+    : tone === 'error' ? 'var(--danger)'
+    : tone === 'pending' ? 'var(--warn)'
+    : 'var(--fg-faint)';
+  const filled = tone === 'ok' || tone === 'error';
+
   return (
     <button
       onClick={onClick}
-      aria-label={synced ? 'synced' : 'local only'}
-      title={synced ? `${account.username} · synced` : 'local only — sync ships in v0.2'}
+      aria-label={label}
+      title={tip}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 6,
         background: 'transparent', border: 0, cursor: 'pointer',
         padding: 0, font: 'inherit',
-        color: synced ? 'var(--fg-mute)' : 'var(--fg-faint)',
+        color: tone === 'error' ? 'var(--danger)' : 'var(--fg-mute)',
       }}
     >
       <span style={{
         width: 6, height: 6, borderRadius: 3,
-        background: synced ? color : 'transparent',
-        border: synced ? '0' : `1.2px solid ${color}`,
-        boxShadow: synced ? `0 0 8px ${color}` : 'none',
+        background: filled ? color : 'transparent',
+        border: filled ? '0' : `1.2px solid ${color}`,
+        boxShadow: filled ? `0 0 8px ${color}` : 'none',
         flexShrink: 0,
       }} />
       {labelled && (
-        <span style={{ fontSize: 11, letterSpacing: 0.3 }}>
-          {synced ? 'synced' : 'local'}
-        </span>
+        <span style={{ fontSize: 11, letterSpacing: 0.3 }}>{label}</span>
       )}
     </button>
   );
+}
+
+function timeAgoShort(ts) {
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
 }
 
 // Date helpers for defer quick-options.
@@ -241,14 +278,19 @@ function App() {
     saveStore({ tasks, projects, contexts });
   }, [tasks, projects, contexts]);
 
-  // Sync folder — reflect the configured value in the UI and listen for
-  // external merges pushed by the Rust sync watcher. When another device
-  // writes tasks.automerge into our sync folder, the backend merges it
-  // into the local doc and emits `tasks-changed` with the new state.
+  // Sync state — the backend emits `tasks-changed` on merge and `sync-status`
+  // on every load/save/watcher tick. We pull the initial snapshot once, then
+  // stay subscribed for the life of the window.
   const [syncFolder, setSyncFolder] = aUseState('');
+  const [syncStatus, setSyncStatus] = aUseState({
+    folder: '', last_synced_at: null, last_sync_error: null,
+  });
   aUseEffect(() => {
-    getSyncFolder().then(setSyncFolder);
-    let unlisten;
+    getSyncStatus().then((s) => {
+      setSyncStatus(s);
+      setSyncFolder(s.folder || '');
+    });
+    const unsubs = [];
     tauriListen('tasks-changed', (event) => {
       const payload = event?.payload;
       if (!payload || typeof payload !== 'object') return;
@@ -257,11 +299,25 @@ function App() {
       if (Array.isArray(payload.contexts) && payload.contexts.length) {
         setContexts(payload.contexts);
       }
-      // Re-query the folder in case the event was triggered by a
-      // set_/clear_sync_folder command.
       getSyncFolder().then(setSyncFolder);
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
+    }).then((fn) => unsubs.push(fn));
+    tauriListen('sync-status', (event) => {
+      const payload = event?.payload;
+      if (!payload || typeof payload !== 'object') return;
+      setSyncStatus({
+        folder: payload.folder || '',
+        last_synced_at: payload.last_synced_at ?? null,
+        last_sync_error: payload.last_sync_error ?? null,
+      });
+      setSyncFolder(payload.folder || '');
+    }).then((fn) => unsubs.push(fn));
+    return () => { unsubs.forEach((u) => u?.()); };
+  }, []);
+  // Tick every 30s so the "X ago" label stays accurate without state churn.
+  const [, setStatusTick] = aUseState(0);
+  aUseEffect(() => {
+    const t = setInterval(() => setStatusTick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
   }, []);
 
   const normalizeCtx = (s) => {
@@ -1029,7 +1085,7 @@ function App() {
             />
 
             {/* Status bar */}
-            <StatusBar mode={mode} activeList={activeList} counts={counts} nowTick={nowTick} cursor={cursor} total={viewTasks.length} projects={projects} syncAccount={sync.account} onSyncClick={sync.openSync} />
+            <StatusBar mode={mode} activeList={activeList} counts={counts} nowTick={nowTick} cursor={cursor} total={viewTasks.length} projects={projects} syncStatus={syncStatus} onSyncClick={() => pickSyncFolder(flashToast)} />
           </main>
 
           {/* Detail pane */}
@@ -1709,7 +1765,7 @@ function QuickAdd({ value, setValue, onCommit, onCancel }) {
   );
 }
 
-function StatusBar({ mode, activeList, counts, nowTick, cursor, total, projects, syncAccount, onSyncClick }) {
+function StatusBar({ mode, activeList, counts, nowTick, cursor, total, projects, syncStatus, onSyncClick }) {
   const modeColor = {
     NORMAL: "var(--accent)",
     INSERT: "var(--success)",
@@ -1729,7 +1785,7 @@ function StatusBar({ mode, activeList, counts, nowTick, cursor, total, projects,
       <span style={S.statusSeg}>{cursor+1}:{total||0}</span>
       <span style={S.statusSeg}>utf-8</span>
       <span style={S.statusSeg}>
-        <SyncDot account={syncAccount} onClick={onSyncClick} labelled />
+        <SyncDot status={syncStatus} onClick={onSyncClick} labelled />
       </span>
       <span style={S.statusSeg}>todarchy</span>
     </div>

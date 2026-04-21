@@ -132,17 +132,35 @@ async fn apply_sync_update(app: &AppHandle) -> Result<()> {
     let Some(sync_path) = app_config::sync_doc_path()? else { return Ok(()); };
     if !sync_path.exists() { return Ok(()); }
 
-    // Load both docs, merge remote into local, persist, emit.
     let local_path = crate::doc::default_doc_path()?;
-    let mut local = TaskDoc::load(&local_path)?;
-    let mut remote = TaskDoc::load(&sync_path)?;
 
-    local.merge(&mut remote)?;
-    local.save(&local_path)?;
-    local.save(&sync_path)?; // push the merged view back out
+    // Any error along the way gets reported via record_error so the
+    // status widget can turn red and the user can see what went wrong.
+    let result: Result<()> = (|| {
+        let mut local = TaskDoc::load(&local_path)?;
+        let heads_before = local.heads();
+        let mut remote = TaskDoc::load(&sync_path)?;
 
-    let json = local.to_json();
-    let _ = app.emit("tasks-changed", &json);
-    tracing::info!("merged external sync update");
+        local.merge(&mut remote)?;
+
+        // Nothing new from remote — avoids echoing our own writes back
+        // to the frontend and status-flapping after every local save.
+        if local.heads() == heads_before {
+            return Ok(());
+        }
+
+        local.save(&local_path)?;
+        local.save(&sync_path)?;
+
+        let json = local.to_json();
+        let _ = app.emit("tasks-changed", &json);
+        tracing::info!("merged external sync update");
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => crate::sync::record_success(app),
+        Err(e) => crate::sync::record_error(app, e.to_string()),
+    }
     Ok(())
 }

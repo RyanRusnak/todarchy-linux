@@ -17,6 +17,16 @@ pub struct Config {
     /// external changes.
     #[serde(default)]
     pub sync_folder: String,
+
+    /// Unix millis of the last successful read-or-write against the sync
+    /// folder. `None` means we've never synced (or sync is off).
+    #[serde(default, rename = "last_synced_at")]
+    pub last_synced_at: Option<i64>,
+
+    /// Human-readable reason the last sync attempt failed, if any.
+    /// Cleared on next successful sync.
+    #[serde(default, rename = "last_sync_error")]
+    pub last_sync_error: Option<String>,
 }
 
 fn config_dir() -> Result<PathBuf> {

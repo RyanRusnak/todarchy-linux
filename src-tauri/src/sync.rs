@@ -1,17 +1,72 @@
-// sync.rs — Tauri commands for the v0.2 folder-sync setting.
-//
-// The user picks a filesystem path (typically one the OS syncs across
-// devices — iCloud Drive, Dropbox, Syncthing, etc.) and todarchy mirrors
-// its Automerge store there on every save. The sync_watcher module
-// picks up external writes (another device pushing edits) and merges
-// them into the local doc live.
-//
-// The older age / BIP39 / relay-server design is gone; v0.2 reuses the
-// file sync the user already has configured on their OS.
+// sync.rs — Tauri commands for the v0.2 folder-sync setting, plus the
+// status-reporting helpers that every sync-touching call site uses to
+// keep the UI's "synced / error / local" indicator honest.
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::config;
+
+/// Wire format of the `sync-status` event + `get_sync_status` return.
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncStatus {
+    pub folder: String,
+    pub last_synced_at: Option<i64>,
+    pub last_sync_error: Option<String>,
+}
+
+pub fn current_status() -> SyncStatus {
+    let cfg = config::load().unwrap_or_default();
+    SyncStatus {
+        folder: cfg.sync_folder,
+        last_synced_at: cfg.last_synced_at,
+        last_sync_error: cfg.last_sync_error,
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Stamp a successful sync and push the new status to the UI.
+/// No-op when no sync folder is configured.
+pub fn record_success(app: &AppHandle) {
+    let mut cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => { tracing::warn!("config load failed in record_success: {e}"); return; }
+    };
+    if cfg.sync_folder.trim().is_empty() { return; }
+    cfg.last_synced_at = Some(now_ms());
+    cfg.last_sync_error = None;
+    if let Err(e) = config::save(&cfg) {
+        tracing::warn!("config save failed in record_success: {e}");
+    }
+    let _ = app.emit("sync-status", &current_status());
+}
+
+/// Stamp a sync failure with a human-readable reason. Logged and pushed
+/// to the UI so the user isn't left wondering why nothing's updating.
+pub fn record_error(app: &AppHandle, reason: impl ToString) {
+    let reason = reason.to_string();
+    tracing::warn!("sync error: {reason}");
+    let mut cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => { tracing::warn!("config load failed in record_error: {e}"); return; }
+    };
+    cfg.last_sync_error = Some(reason);
+    if let Err(e) = config::save(&cfg) {
+        tracing::warn!("config save failed in record_error: {e}");
+    }
+    let _ = app.emit("sync-status", &current_status());
+}
+
+#[tauri::command]
+pub fn get_sync_status() -> Result<SyncStatus, String> {
+    Ok(current_status())
+}
 
 #[tauri::command]
 pub fn get_sync_folder() -> Result<String, String> {
@@ -24,8 +79,13 @@ pub fn get_sync_folder() -> Result<String, String> {
 pub async fn set_sync_folder(app: AppHandle, folder: String) -> Result<(), String> {
     let mut cfg = config::load().map_err(|e| e.to_string())?;
     cfg.sync_folder = folder.trim().to_string();
+    // Clear any previous error / stale timestamp — the new folder is
+    // starting its own sync lifecycle.
+    cfg.last_sync_error = None;
+    cfg.last_synced_at = None;
     config::save(&cfg).map_err(|e| e.to_string())?;
     tracing::info!("sync folder set: {}", cfg.sync_folder);
+    let _ = app.emit("sync-status", &current_status());
 
     // Seed the new folder with current state, or merge+converge if the
     // folder already had a tasks.automerge from another device.
@@ -37,10 +97,16 @@ pub async fn set_sync_folder(app: AppHandle, folder: String) -> Result<(), Strin
                 "post-merge: tasks={} projects={}",
                 n_tasks, n_projects
             );
-            let _ = crate::store::save(&app, json.clone()).await;
+            if let Err(e) = crate::store::save(&app, json.clone()).await {
+                record_error(&app, e);
+            } else {
+                record_success(&app);
+            }
             let _ = app.emit("tasks-changed", &json);
         }
-        Err(e) => tracing::warn!("set_sync_folder: store::load failed: {e}"),
+        Err(e) => {
+            record_error(&app, format!("merge on folder pick: {e}"));
+        }
     }
     Ok(())
 }
@@ -49,7 +115,10 @@ pub async fn set_sync_folder(app: AppHandle, folder: String) -> Result<(), Strin
 pub async fn clear_sync_folder(app: AppHandle) -> Result<(), String> {
     let mut cfg = config::load().map_err(|e| e.to_string())?;
     cfg.sync_folder = String::new();
+    cfg.last_synced_at = None;
+    cfg.last_sync_error = None;
     config::save(&cfg).map_err(|e| e.to_string())?;
+    let _ = app.emit("sync-status", &current_status());
     let _ = app.emit("tasks-changed", serde_json::Value::Null);
     Ok(())
 }
