@@ -104,6 +104,11 @@ impl TaskDoc {
             .with_context(|| format!("writing {}", tmp.display()))?;
         std::fs::rename(&tmp, path)
             .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
+        tracing::info!(
+            "wrote automerge doc: path={} bytes={}",
+            path.display(),
+            bytes.len()
+        );
         Ok(())
     }
 
