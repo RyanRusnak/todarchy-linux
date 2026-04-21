@@ -32,11 +32,25 @@ export const CONTEXTS = ["@home","@work","@errands","@mac","@phone","@read"];
 
 // pubkey-ish ids (stable for React keys)
 let _id = 1000;
+// Task/project id generator. Emits RFC 4122 UUIDs so Apple platforms can
+// decode the ids via Swift's strict `UUID(uuidString:)` initializer — the
+// earlier short-id scheme (e.g. "sdndt3gvg") made Linux-created tasks
+// invisible on macOS/iOS because their decoder silently dropped any
+// entry whose id didn't parse as a UUID.
 export const nid = () => {
-  // include per-session random + monotonic counter + time to avoid collisions across reloads
-  const t = Date.now().toString(36);
-  const r = Math.floor(Math.random() * 46656).toString(36).padStart(3, "0");
-  return (++_id).toString(36) + t.slice(-4) + r;
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback for jsdom / older WebViews that don't expose crypto.randomUUID.
+  // RFC 4122 v4 assembly from getRandomValues.
+  const bytes = new Uint8Array(16);
+  (typeof crypto !== 'undefined' && crypto.getRandomValues)
+    ? crypto.getRandomValues(bytes)
+    : bytes.forEach((_, i) => { bytes[i] = Math.floor(Math.random() * 256); });
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant
+  const h = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 };
 
 export const seedTasks = [
