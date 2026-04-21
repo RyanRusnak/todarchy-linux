@@ -163,16 +163,37 @@ impl TaskDoc {
 // ---------- Read: Automerge → JSON ----------
 
 fn read_map_as_array(doc: &Automerge, key: &str) -> Json {
-    let Ok(Some((Value::Object(ObjType::Map), map))) = doc.get(ROOT, key) else {
-        return Json::Array(Vec::new());
-    };
-    let mut out = Vec::new();
-    for k in doc.keys(&map) {
-        if let Ok(Some((Value::Object(ObjType::Map), entry))) = doc.get(&map, &k) {
-            out.push(read_map_contents(doc, entry));
+    // Tolerate both the canonical Map<id, Task> schema and the older
+    // List<Task> schema. macOS/iOS builds that shipped before the schema
+    // update wrote tasks as a List; we read them so the migration path
+    // is "Linux opens the old doc → converts to Map on next save".
+    match doc.get(ROOT, key) {
+        Ok(Some((Value::Object(ObjType::Map), map))) => {
+            let mut out = Vec::new();
+            for k in doc.keys(&map) {
+                if let Ok(Some((Value::Object(ObjType::Map), entry))) = doc.get(&map, &k) {
+                    out.push(read_map_contents(doc, entry));
+                }
+            }
+            Json::Array(out)
         }
+        Ok(Some((Value::Object(ObjType::List), list))) => {
+            let len = doc.length(&list);
+            let mut out = Vec::with_capacity(len);
+            for i in 0..len {
+                if let Ok(Some((Value::Object(ObjType::Map), entry))) = doc.get(&list, i) {
+                    out.push(read_map_contents(doc, entry));
+                }
+            }
+            tracing::info!(
+                "read {} entries from legacy List-schema `{}`; next save will migrate to Map",
+                out.len(),
+                key
+            );
+            Json::Array(out)
+        }
+        _ => Json::Array(Vec::new()),
     }
-    Json::Array(out)
 }
 
 fn read_map_as_sorted_array(doc: &Automerge, key: &str) -> Json {

@@ -25,12 +25,22 @@ pub async fn set_sync_folder(app: AppHandle, folder: String) -> Result<(), Strin
     let mut cfg = config::load().map_err(|e| e.to_string())?;
     cfg.sync_folder = folder.trim().to_string();
     config::save(&cfg).map_err(|e| e.to_string())?;
+    tracing::info!("sync folder set: {}", cfg.sync_folder);
 
     // Seed the new folder with current state, or merge+converge if the
     // folder already had a tasks.automerge from another device.
-    if let Ok(json) = crate::store::load(&app).await {
-        let _ = crate::store::save(&app, json.clone()).await;
-        let _ = app.emit("tasks-changed", &json);
+    match crate::store::load(&app).await {
+        Ok(json) => {
+            let n_tasks = json.get("tasks").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            let n_projects = json.get("projects").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            tracing::info!(
+                "post-merge: tasks={} projects={}",
+                n_tasks, n_projects
+            );
+            let _ = crate::store::save(&app, json.clone()).await;
+            let _ = app.emit("tasks-changed", &json);
+        }
+        Err(e) => tracing::warn!("set_sync_folder: store::load failed: {e}"),
     }
     Ok(())
 }
