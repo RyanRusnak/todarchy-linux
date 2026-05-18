@@ -146,3 +146,26 @@ export function timeAgo(ts) {
   return d + "d";
 }
 
+// Per-device display name stamped on new task comments. Matches the iOS
+// app's `CommentAuthor` UserDefaults key (`todarchy.comment.displayName`)
+// so the two platforms behave consistently — set the name in either app
+// and freshly-posted comments use it. The value is intentionally local
+// per device (not synced) so each user controls their own identity.
+export const COMMENT_AUTHOR_KEY = "todarchy.comment.displayName";
+
+export function getCommentAuthor() {
+  try {
+    const stored = (localStorage.getItem(COMMENT_AUTHOR_KEY) || "").trim();
+    if (stored) return stored;
+  } catch { /* localStorage may be unavailable in jsdom */ }
+  return "Me";
+}
+
+export function setCommentAuthor(name) {
+  const trimmed = (name || "").trim();
+  try {
+    if (!trimmed) localStorage.removeItem(COMMENT_AUTHOR_KEY);
+    else localStorage.setItem(COMMENT_AUTHOR_KEY, trimmed);
+  } catch { /* ignore — display name will fall back to "Me" */ }
+}
+

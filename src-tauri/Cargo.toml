@@ -29,10 +29,24 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] 
 # different devices. `age`/`argon2`/`reqwest` from the original
 # relay-based design are gone — the folder-sync model doesn't need them.
 automerge = "0.8"
+# sharing — per-project encrypted files. ChaCha20-Poly1305 envelope
+# matches the iOS app's CryptoBox byte-for-byte. base64 for the
+# URL-safe key encoding in share-link fragments. keyring wraps
+# libsecret/secret-service on Linux for symmetric-key storage.
+chacha20poly1305 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+keyring = "3"
+# URL scheme handler for todarchy:// share links
+tauri-plugin-deep-link = "2"
 # utility
 once_cell = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+# Used by per_project.rs tests for isolated temporary sync folders.
+tempfile = "3"
 
 [features]
 default = ["custom-protocol"]

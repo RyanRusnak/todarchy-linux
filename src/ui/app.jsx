@@ -11,7 +11,10 @@ import { Icon } from './icons.jsx';
 import { Palette } from './palette.jsx';
 import { useOmarchyTheme } from '../theme/useOmarchyTheme';
 import { loadStore, saveStore, deleteIdsInStore } from './storage.jsx';
-import { pickSyncFolder, clearSyncFolder, getSyncFolder, getSyncStatus } from './sync-commands.jsx';
+import {
+  pickSyncFolder, clearSyncFolder, getSyncFolder, getSyncStatus,
+  promoteProject, acceptShareLink, leaveSharedProject, copyToClipboard,
+} from './sync-commands.jsx';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 import {
   LISTS,
@@ -25,6 +28,8 @@ import {
   parseQuickAdd,
   timeAgo,
   formatDeferUntil,
+  getCommentAuthor,
+  setCommentAuthor,
 } from './data.jsx';
 
 // Sync status indicator for the status bar. Three visual states:
@@ -554,6 +559,26 @@ function App() {
     setTasks(ts => ts.map(t => t.id === id ? { ...t, ...patch } : t));
   };
 
+  // Append a comment to a task. Comments are an object keyed by commentId
+  // so the underlying Automerge Map<id, Comment> sees per-comment inserts —
+  // two devices appending concurrently both survive merge. Append-only:
+  // matches the iOS app's deliberate no-edit/no-delete v1 semantics, which
+  // keeps "who deleted that?" ambiguity off the table between devices.
+  const addComment = (taskId, rawText) => {
+    const text = (rawText || "").trim();
+    if (!text) return;
+    const id = nid();
+    const author = getCommentAuthor();
+    const createdAt = Date.now();
+    const comment = { id, author, text, createdAt };
+    setTasks(ts => ts.map(t => {
+      if (t.id !== taskId) return t;
+      const existing = (t.comments && typeof t.comments === 'object' && !Array.isArray(t.comments))
+        ? t.comments : {};
+      return { ...t, comments: { ...existing, [id]: comment } };
+    }));
+  };
+
   // ---------- Nesting ----------
   // Can target be made a descendant of source? (i.e. is target already a descendant of source?)
   const isDescendant = (ancestorId, candidateId, taskList = tasks) => {
@@ -759,6 +784,66 @@ function App() {
         if (doneIds.length) deleteIdsInStore('tasks', doneIds);
         flashToast("cleared done");
       } },
+      // Per-device display name stamped on new task comments. Shares
+      // the `todarchy.comment.displayName` key with the iOS app so the
+      // setting is consistent if a user has both — set it once in
+      // either app and freshly-posted comments adopt it.
+      { id: "set-comment-author", title: `set comment author… (now: ${getCommentAuthor()})`,
+        hint: "shown on new comments you post",
+        run: () => {
+          const next = window.prompt("comment author", getCommentAuthor());
+          if (next == null) return;
+          setCommentAuthor(next);
+          flashToast(`comments will post as ${getCommentAuthor()}`);
+        } },
+      // Sharing — per-project encrypted files. Available only when
+      // sync is configured (the backend rejects with a friendly error
+      // otherwise, but we surface that up front so the palette is
+      // honest about what's available).
+      ...projects.map(p => p.isShared
+        ? {
+            id: "share-leave-" + p.id,
+            title: `unshare locally: ${p.name}`,
+            hint: "removes the key + file from this device; peers keep theirs",
+            run: async () => {
+              try {
+                await leaveSharedProject(p.id);
+                flashToast(`left ${p.name}`);
+              } catch (e) {
+                flashToast(`leave failed: ${e}`);
+              }
+            },
+          }
+        : {
+            id: "share-promote-" + p.id,
+            title: `share project: ${p.name}`,
+            hint: syncFolder ? "encrypts + writes shared_<id>.automerge.enc" : "set a sync folder first",
+            run: async () => {
+              if (!syncFolder) { flashToast("set a sync folder first"); return; }
+              try {
+                const link = await promoteProject(p.id);
+                const ok = await copyToClipboard(link);
+                flashToast(ok ? "share link copied" : `link: ${link}`);
+                window.alert(`Share link for ${p.name}:\n\n${link}\n\nKeep this safe — anyone holding it can read + write this project.`);
+              } catch (e) {
+                flashToast(`share failed: ${e}`);
+              }
+            },
+          }),
+      { id: "share-accept",
+        title: "accept a share link…",
+        hint: "paste a todarchy:// URL",
+        run: async () => {
+          if (!syncFolder) { flashToast("set a sync folder first"); return; }
+          const url = window.prompt("paste a todarchy:// share link");
+          if (!url) return;
+          try {
+            const projectId = await acceptShareLink(url);
+            flashToast(`joined ${projectId}`);
+          } catch (e) {
+            flashToast(`accept failed: ${e}`);
+          }
+        } },
     ];
   }, [currentTask, tasks, activeList, projects, showDone, showDeferred, showDetail, contexts, sync.account, syncFolder]);
 
@@ -980,6 +1065,17 @@ function App() {
                     <span style={{ flex: 1, textAlign: "left", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {p.name}
                     </span>
+                    {p.isShared && (
+                      <span
+                        title="shared project — encrypted in your sync folder"
+                        style={{
+                          color: "var(--cyan)", fontSize: 9, letterSpacing: 0.6,
+                          textTransform: "uppercase", padding: "1px 4px",
+                          border: "1px solid color-mix(in oklab, var(--cyan) 40%, transparent)",
+                          borderRadius: 3, marginRight: 4,
+                        }}
+                      >shared</span>
+                    )}
                     <span style={S.projCount}>{n}</span>
                     {i < 5 && <span className="kbd" style={{ marginLeft: 2 }}>{i+1}</span>}
                   </button>
@@ -1092,7 +1188,7 @@ function App() {
           {showDetail && (
           <aside style={S.detail}>
             {currentTask ? (
-              <Detail task={currentTask} onUpdate={(patch) => updateTask(currentTask.id, patch)} onMove={(l) => moveToList(currentTask.id, l)} onDelete={() => deleteTask(currentTask.id)} onDefer={() => openDefer(currentTask.id)} onClearDefer={() => clearDefer(currentTask.id)} contexts={contexts} projects={projects} />
+              <Detail task={currentTask} onUpdate={(patch) => updateTask(currentTask.id, patch)} onMove={(l) => moveToList(currentTask.id, l)} onDelete={() => deleteTask(currentTask.id)} onDefer={() => openDefer(currentTask.id)} onClearDefer={() => clearDefer(currentTask.id)} onAddComment={(text) => addComment(currentTask.id, text)} contexts={contexts} projects={projects} />
             ) : (
               <EmptyDetail />
             )}
@@ -1608,7 +1704,7 @@ function ThemedSelect({ value, onChange, options, placeholder = '—' }) {
   );
 }
 
-function Detail({ task, onUpdate, onMove, onDelete, onDefer, onClearDefer, contexts, projects }) {
+function Detail({ task, onUpdate, onMove, onDelete, onDefer, onClearDefer, onAddComment, contexts, projects }) {
   const isDone = !!task.doneAt;
   const isDeferred = task.deferUntil && task.deferUntil > Date.now();
   return (
@@ -1697,11 +1793,101 @@ function Detail({ task, onUpdate, onMove, onDelete, onDefer, onClearDefer, conte
         />
       </div>
 
+      <Comments task={task} onAddComment={onAddComment} />
+
       <div style={S.detailFooter}>
         <button onClick={onDelete} style={S.dangerBtn}>
           <Icon name="trash" size={12} />
           <span>delete</span>
           <span className="kbd">d</span><span className="kbd">d</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Conversation entries on a task — shared with the iOS/macOS app via the
+// Automerge `comments` Map<id, Comment>. Append-only by design: edits and
+// deletes are intentionally unsupported in v1 so the merge semantics stay
+// simple across devices. Comment object shape matches iOS exactly:
+// { id, author, text, createdAt }, all stored as plain scalars.
+function Comments({ task, onAddComment }) {
+  const [draft, setDraft] = aUseState("");
+  const ta = aUseRef(null);
+  const author = getCommentAuthor();
+  // Comments are an object keyed by commentId (Automerge Map). Display by
+  // createdAt ASC so the conversation reads chronologically.
+  const comments = aUseMemo(() => {
+    const obj = task.comments;
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return [];
+    return Object.values(obj)
+      .filter(c => c && typeof c === "object" && typeof c.text === "string")
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  }, [task.comments]);
+
+  const canPost = draft.trim().length > 0;
+  const post = () => {
+    if (!canPost || !onAddComment) return;
+    onAddComment(draft);
+    setDraft("");
+    if (ta.current) ta.current.focus();
+  };
+
+  return (
+    <div style={S.comments}>
+      <div style={S.commentsHeader}>
+        <span style={S.metaKey}>comments</span>
+        {comments.length > 0 && (
+          <span style={{ color: "var(--fg-faint)", fontSize: 11 }}>
+            ({comments.length})
+          </span>
+        )}
+      </div>
+
+      {comments.length === 0 ? (
+        <div style={S.commentsEmpty}>no comments yet</div>
+      ) : (
+        <div style={S.commentList}>
+          {comments.map(c => (
+            <div key={c.id} style={S.commentItem}>
+              <div style={S.commentMeta}>
+                <span style={S.commentAuthor}>{c.author || "anon"}</span>
+                <span style={S.commentTime}>
+                  {c.createdAt ? timeAgo(c.createdAt) + " ago" : ""}
+                </span>
+              </div>
+              <div style={S.commentText}>{c.text}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <textarea
+        ref={ta}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => {
+          // ⌘↵ / Ctrl+↵ → post. Mirrors iOS's keyboard shortcut so the
+          // muscle memory carries across devices.
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            post();
+          }
+        }}
+        placeholder={`add a comment as ${author}…`}
+        style={S.commentInput}
+        rows={2}
+      />
+      <div style={S.commentActions}>
+        <span style={{ color: "var(--fg-faint)", fontSize: 11 }}>
+          <span className="kbd">⌘</span><span className="kbd">↵</span> post
+        </span>
+        <button onClick={post} disabled={!canPost} style={{
+          ...S.commentPostBtn,
+          opacity: canPost ? 1 : 0.5,
+          cursor: canPost ? "pointer" : "default",
+        }}>
+          post
         </button>
       </div>
     </div>
@@ -2154,6 +2340,62 @@ const S = {
     borderRadius: 4,
     cursor: "pointer",
     font: "inherit", fontSize: 12,
+  },
+
+  comments: {
+    display: "flex", flexDirection: "column", gap: 8,
+    marginTop: 8,
+  },
+  commentsHeader: {
+    display: "flex", alignItems: "baseline", gap: 6,
+  },
+  commentsEmpty: {
+    color: "var(--fg-faint)",
+    fontSize: 11.5, fontStyle: "italic",
+  },
+  commentList: {
+    display: "flex", flexDirection: "column", gap: 6,
+  },
+  commentItem: {
+    padding: "8px 10px",
+    background: "var(--bg-soft)",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    display: "flex", flexDirection: "column", gap: 2,
+  },
+  commentMeta: {
+    display: "flex", alignItems: "baseline", gap: 6,
+  },
+  commentAuthor: {
+    color: "var(--fg)", fontSize: 11.5, fontWeight: 600,
+  },
+  commentTime: {
+    color: "var(--fg-faint)", fontSize: 10.5,
+  },
+  commentText: {
+    color: "var(--fg-dim)", fontSize: 12.5,
+    whiteSpace: "pre-wrap", wordBreak: "break-word",
+  },
+  commentInput: {
+    width: "100%", minHeight: 44, resize: "vertical",
+    background: "var(--bg-soft)",
+    color: "var(--fg)",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    padding: "6px 8px",
+    font: "inherit", fontSize: 12.5,
+    outline: 0,
+  },
+  commentActions: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+  },
+  commentPostBtn: {
+    background: "var(--accent)",
+    color: "var(--bg)",
+    border: 0,
+    borderRadius: 4,
+    padding: "4px 10px",
+    font: "inherit", fontSize: 11.5, fontWeight: 600,
   },
 
   quickAddWrap: {

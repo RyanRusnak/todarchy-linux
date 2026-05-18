@@ -60,3 +60,49 @@ function short(p) {
   if (p.length <= 40) return p;
   return '…' + p.slice(-39);
 }
+
+// ---------- Shared projects (encrypted per-project files) ----------
+//
+// All three commands require a sync folder; the backend rejects them
+// with a friendly error otherwise. UI flow:
+//   - promote: project's tasks move into shared_<id>.automerge.enc;
+//     returns a todarchy:// share link to copy and send to collaborators.
+//   - accept: paste a link; backend stores the key locally; once the
+//     encrypted file arrives via Dropbox/iCloud/etc, tasks appear.
+//   - leave: forget the key on this device. Peers keep their copies.
+
+export async function promoteProject(projectId) {
+  return invoke('share_promote', { projectId });
+}
+
+export async function acceptShareLink(url) {
+  return invoke('share_accept', { url });
+}
+
+export async function leaveSharedProject(projectId) {
+  return invoke('share_leave', { projectId });
+}
+
+/// Copy `text` to the clipboard. Uses navigator.clipboard when available
+/// (Tauri webview supports it on Linux); falls back to a hidden textarea
+/// + document.execCommand for older webviews.
+export async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to legacy path */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+}

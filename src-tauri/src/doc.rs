@@ -25,8 +25,42 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use automerge::{transaction::Transactable, Automerge, ObjType, ReadDoc, ScalarValue, Value, ROOT};
+use automerge::{transaction::Transactable, ActorId, Automerge, ObjType, ReadDoc, ScalarValue, Value, ROOT};
+use once_cell::sync::Lazy;
 use serde_json::{json, Map, Value as Json};
+
+/// Canonical seed actor id, byte-identical to the iOS app's `seedActor`
+/// (UUID `544F4441-5243-4859-5345-454400000001`). Every device's fresh
+/// doc starts from these same 16 bytes as the actor, so the operations
+/// that create the root `tasks` / `projects` / `contexts` Maps produce
+/// the same Automerge ObjIds across platforms. Without this, two
+/// independently-created docs merge by tombstoning one side's root
+/// objects — silently dropping every task in them.
+const SEED_ACTOR_BYTES: [u8; 16] = [
+    0x54, 0x4F, 0x44, 0x41, 0x52, 0x43, 0x48, 0x59,
+    0x53, 0x45, 0x45, 0x44, 0x00, 0x00, 0x00, 0x01,
+];
+
+/// Computed once per process. iOS does the same trick: build an empty
+/// doc using the seed actor, run the shape-bootstrap ops, save the
+/// resulting bytes. New devices load these bytes and `fork()` for their
+/// own actor — the seed history is shared, so future merges align.
+static SEED_BYTES: Lazy<Vec<u8>> = Lazy::new(|| {
+    let mut doc = Automerge::new().with_actor(ActorId::from(SEED_ACTOR_BYTES.to_vec()));
+    let mut tx = doc.transaction();
+    tx.put(ROOT, "version", 1_i64).expect("seed version");
+    tx.put_object(ROOT, "tasks", ObjType::Map).expect("seed tasks");
+    tx.put_object(ROOT, "projects", ObjType::Map).expect("seed projects");
+    let ctx = tx.put_object(ROOT, "contexts", ObjType::List).expect("seed contexts");
+    for (i, c) in ["@home", "@work", "@errands", "@mac", "@phone", "@read"]
+        .iter()
+        .enumerate()
+    {
+        tx.insert(&ctx, i, *c).expect("seed context entry");
+    }
+    tx.commit();
+    doc.save()
+});
 
 /// Wrapper around an `Automerge` doc with task-store helpers.
 pub struct TaskDoc {
@@ -34,23 +68,14 @@ pub struct TaskDoc {
 }
 
 impl TaskDoc {
-    /// Create a fresh empty doc seeded with the default contexts.
+    /// Create a fresh empty doc that shares the canonical seed history
+    /// (and therefore the same root Map ObjIds) with every other
+    /// todarchy install. Fresh from this seed, then `fork()` so this
+    /// device gets a unique actor for its own writes.
     pub fn new() -> Result<Self> {
-        let mut doc = Automerge::new();
-        let mut tx = doc.transaction();
-        tx.put(ROOT, "version", 1_i64)?;
-        tx.put_object(ROOT, "tasks", ObjType::Map)?;
-        tx.put_object(ROOT, "projects", ObjType::Map)?;
-        let ctx = tx.put_object(ROOT, "contexts", ObjType::List)?;
-        for (i, c) in [
-            "@home", "@work", "@errands", "@mac", "@phone", "@read",
-        ]
-        .iter()
-        .enumerate()
-        {
-            tx.insert(&ctx, i, *c)?;
-        }
-        tx.commit();
+        let doc = Automerge::load(&SEED_BYTES)
+            .context("loading canonical seed bytes")?
+            .fork();
         Ok(Self { doc })
     }
 
@@ -181,13 +206,28 @@ impl TaskDoc {
     pub fn apply_json(&mut self, data: &Json) -> Result<()> {
         let mut tx = self.doc.transaction();
         tx.put(ROOT, "version", 1_i64)?;
-        apply_map(&mut tx, "tasks", data.get("tasks"), "id")?;
-        apply_map(&mut tx, "projects", data.get("projects"), "id")?;
+        apply_map(&mut tx, "tasks", data.get("tasks"), "id", TASK_CLEARABLE_FIELDS)?;
+        apply_map(&mut tx, "projects", data.get("projects"), "id", PROJECT_CLEARABLE_FIELDS)?;
         apply_contexts(&mut tx, data.get("contexts"))?;
         tx.commit();
         Ok(())
     }
 }
+
+// Known scalar fields per object type that the Linux frontend is allowed
+// to clear by omission. Absence of one of these in the incoming JSON for
+// an existing task/project deletes the field from the doc (so a user
+// "clear due date" round-trips correctly).
+//
+// Any field NOT in these lists is preserved as-is when missing from the
+// snapshot — that's the whole point of upsert-only: iOS-written fields
+// the Linux UI doesn't model yet (`comments`, `isShared`, `claudeAccess`,
+// `isInbox`) must survive a Linux save unchanged, otherwise sync silently
+// corrupts cross-platform data.
+const TASK_CLEARABLE_FIELDS: &[&str] = &[
+    "ctx", "due", "note", "doneAt", "deferUntil", "parent", "pos",
+];
+const PROJECT_CLEARABLE_FIELDS: &[&str] = &["icon", "accent"];
 
 // ---------- Read: Automerge → JSON ----------
 
@@ -263,8 +303,6 @@ fn read_map_contents(doc: &Automerge, obj: automerge::ObjId) -> Json {
                 out.insert(key, scalar_to_json(&s));
             }
             Ok(Some((Value::Object(ObjType::List), inner))) => {
-                // Nested lists aren't used by the current schema but keep
-                // round-trip round-tripping defensively.
                 let len = doc.length(&inner);
                 let mut arr = Vec::with_capacity(len);
                 for i in 0..len {
@@ -273,6 +311,15 @@ fn read_map_contents(doc: &Automerge, obj: automerge::ObjId) -> Json {
                     }
                 }
                 out.insert(key, Json::Array(arr));
+            }
+            Ok(Some((Value::Object(ObjType::Map), inner))) => {
+                // Nested Maps — e.g. a task's `comments` keyed by
+                // commentId, as written by iOS. The Linux frontend
+                // doesn't render these yet, but the projection must
+                // include them so React's spread-then-save round-trips
+                // them faithfully and apply_object_fields can re-upsert
+                // into the existing Map.
+                out.insert(key, read_map_contents(doc, inner));
             }
             _ => {}
         }
@@ -301,6 +348,7 @@ fn apply_map(
     key: &str,
     value: Option<&Json>,
     id_field: &str,
+    clearable: &[&str],
 ) -> Result<()> {
     // Upsert-only. Absence of an id in `incoming` does NOT delete the entry —
     // another device may have added it between the frontend's last load and
@@ -321,7 +369,7 @@ fn apply_map(
             Some((Value::Object(ObjType::Map), id)) => id,
             _ => tx.put_object(&map, item_id, ObjType::Map)?,
         };
-        apply_object_fields(tx, entry, item)?;
+        apply_object_fields(tx, entry, item, clearable)?;
     }
     Ok(())
 }
@@ -339,26 +387,44 @@ pub fn delete_entry(doc: &mut Automerge, root_key: &str, id: &str) -> Result<()>
     Ok(())
 }
 
+/// Apply incoming field values to an existing Automerge map entry.
+///
+/// - Known scalar fields (`clearable`) absent from the incoming object are
+///   deleted from the doc. This lets the frontend clear, say, a due date
+///   by spreading the task without the `due` key.
+/// - Any other field — `comments` (iOS-only Map), `isShared`,
+///   `claudeAccess`, `isInbox`, or anything a future client adds — is
+///   left alone when missing from the snapshot, so Linux's save doesn't
+///   silently wipe iOS-written content.
+/// - Nested Map sub-objects reuse the existing Map's ObjId so concurrent
+///   inserts from another device (e.g. iOS appending a comment) survive
+///   merge. Without this, every Linux save would `put_object` a fresh
+///   Map at the key, divorcing both devices' inserts.
 fn apply_object_fields(
     tx: &mut automerge::transaction::Transaction<'_>,
     obj: automerge::ObjId,
     value: &Json,
+    clearable: &[&str],
 ) -> Result<()> {
     let Json::Object(fields) = value else {
         return Ok(());
     };
-    // Remove keys no longer in the incoming object.
-    let existing: Vec<String> = tx.keys(&obj).collect();
-    for k in &existing {
-        if !fields.contains_key(k) {
-            tx.delete(&obj, k.as_str())?;
+
+    // Phase 1: explicit clears for known scalar fields.
+    for known in clearable {
+        if !fields.contains_key(*known) {
+            let _ = tx.delete(&obj, *known);
         }
     }
-    // Set/update every incoming field.
+
+    // Phase 2: upsert every incoming field.
     for (k, v) in fields {
         match v {
+            // Treat explicit null as "delete this key". Matches the iOS
+            // writer, which omits a key when its Swift field is nil
+            // rather than storing a Null scalar.
             Json::Null => {
-                tx.put(&obj, k.as_str(), ScalarValue::Null)?;
+                let _ = tx.delete(&obj, k.as_str());
             }
             Json::Bool(b) => {
                 tx.put(&obj, k.as_str(), *b)?;
@@ -373,8 +439,6 @@ fn apply_object_fields(
             Json::String(s) => {
                 tx.put(&obj, k.as_str(), s.clone())?;
             }
-            // Nested arrays/objects inside a task aren't in the current
-            // schema, but keep the write path conservative.
             Json::Array(items) => {
                 let list = tx.put_object(&obj, k.as_str(), ObjType::List)?;
                 for (i, item) in items.iter().enumerate() {
@@ -384,8 +448,14 @@ fn apply_object_fields(
                 }
             }
             Json::Object(_) => {
-                let child = tx.put_object(&obj, k.as_str(), ObjType::Map)?;
-                apply_object_fields(tx, child, v)?;
+                let child = match tx.get(&obj, k.as_str())? {
+                    Some((Value::Object(ObjType::Map), id)) => id,
+                    _ => tx.put_object(&obj, k.as_str(), ObjType::Map)?,
+                };
+                // Sub-Maps (e.g. `comments`) are upsert-only — pass an
+                // empty `clearable` so absence of a comment in the
+                // incoming Map doesn't delete it from the doc.
+                apply_object_fields(tx, child, v, &[])?;
             }
         }
     }
@@ -599,5 +669,165 @@ mod tests {
         let t = &out["tasks"][0];
         assert_eq!(t["title"], "A's edit");
         assert_eq!(t["due"], "today");
+    }
+
+    #[test]
+    fn apply_json_preserves_ios_only_fields_when_absent_from_snapshot() {
+        // The cross-platform corruption bug: Linux must not wipe fields it
+        // doesn't model when those fields are missing from the incoming
+        // snapshot. iOS writes `comments` (Map<id, Comment>) on tasks and
+        // `isShared` / `claudeAccess` / `isInbox` flags on projects. Older
+        // versions of `apply_object_fields` aggressively deleted any key not
+        // in the payload — so a single Linux save silently destroyed iOS
+        // data after sync.
+        let mut d = TaskDoc::new().unwrap();
+        d.apply_json(&json!({
+            "tasks": [{
+                "id": "t1", "list": "inbox", "title": "ios-task",
+                "created": 1_i64,
+                "comments": {
+                    "c1": { "id": "c1", "author": "Mac", "text": "hi",
+                            "createdAt": 100_i64 }
+                }
+            }],
+            "projects": [{
+                "id": "p1", "name": "shared-proj", "icon": "folder",
+                "accent": "#7aa2f7", "isShared": true, "claudeAccess": true,
+                "isInbox": false
+            }],
+            "contexts": []
+        })).unwrap();
+
+        // Linux re-saves with a snapshot that doesn't include the iOS-only
+        // fields (simulating either a stale frontend snapshot or a manual
+        // strip somewhere in the React pipeline).
+        d.apply_json(&json!({
+            "tasks": [{ "id": "t1", "list": "inbox", "title": "ios-task",
+                          "created": 1_i64 }],
+            "projects": [{ "id": "p1", "name": "shared-proj", "icon": "folder",
+                            "accent": "#7aa2f7" }],
+            "contexts": []
+        })).unwrap();
+
+        let out = d.to_json();
+        let t = &out["tasks"].as_array().unwrap()[0];
+        let comments = t.get("comments")
+            .expect("comments map must survive a Linux save")
+            .as_object()
+            .expect("comments is a Map<id, Comment>");
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments["c1"]["text"], "hi");
+        assert_eq!(comments["c1"]["author"], "Mac");
+
+        let p = &out["projects"].as_array().unwrap()[0];
+        assert_eq!(p.get("isShared"), Some(&json!(true)), "isShared bool preserved");
+        assert_eq!(p.get("claudeAccess"), Some(&json!(true)), "claudeAccess preserved");
+        // `isInbox: false` was in the payload as an explicit false; we'd
+        // expect it round-trips faithfully.
+        assert_eq!(p.get("isInbox"), Some(&json!(false)));
+    }
+
+    #[test]
+    fn apply_json_still_clears_known_scalar_fields_by_omission() {
+        // The flip side of the previous test: known scalar fields on tasks
+        // (due, doneAt, deferUntil, parent, pos, note, ctx) MUST be
+        // clearable by omission, because that's how the Linux React
+        // frontend de-sets them — `{ ...t, doneAt: undefined }` spreads
+        // then JSON.stringify drops the key.
+        let mut d = TaskDoc::new().unwrap();
+        d.apply_json(&json!({
+            "tasks": [{ "id": "t1", "list": "inbox", "title": "x",
+                          "due": "today", "deferUntil": 100_i64,
+                          "parent": "p", "pos": 1_i64,
+                          "created": 1_i64 }],
+            "projects": [], "contexts": []
+        })).unwrap();
+
+        d.apply_json(&json!({
+            "tasks": [{ "id": "t1", "list": "inbox", "title": "x",
+                          "created": 1_i64 }],
+            "projects": [], "contexts": []
+        })).unwrap();
+
+        let out = d.to_json();
+        let t = &out["tasks"].as_array().unwrap()[0];
+        assert!(t.get("due").and_then(|v| v.as_str()).is_none(), "due cleared");
+        assert!(t.get("deferUntil").and_then(|v| v.as_i64()).is_none(),
+                "deferUntil cleared");
+        assert!(t.get("parent").and_then(|v| v.as_str()).is_none(), "parent cleared");
+        assert!(t.get("pos").and_then(|v| v.as_i64()).is_none(), "pos cleared");
+    }
+
+    #[test]
+    fn explicit_null_clears_field_like_ios_writer() {
+        // React sometimes sends `parent: null` (e.g. when un-nesting a
+        // task). Apply should treat null as an explicit delete so the
+        // resulting bytes match what iOS writes when its `parent` field
+        // is nil — iOS omits the key entirely.
+        let mut d = TaskDoc::new().unwrap();
+        d.apply_json(&json!({
+            "tasks": [{ "id": "t1", "list": "inbox", "title": "x",
+                          "parent": "p1", "created": 1_i64 }],
+            "projects": [], "contexts": []
+        })).unwrap();
+        d.apply_json(&json!({
+            "tasks": [{ "id": "t1", "list": "inbox", "title": "x",
+                          "parent": null, "created": 1_i64 }],
+            "projects": [], "contexts": []
+        })).unwrap();
+        let out = d.to_json();
+        let t = &out["tasks"].as_array().unwrap()[0];
+        assert!(t.get("parent").and_then(|v| v.as_str()).is_none(),
+                "null in snapshot deletes the parent key");
+    }
+
+    #[test]
+    fn nested_comments_map_id_is_stable_across_saves() {
+        // CRDT correctness: when a task already has a `comments` Map and
+        // Linux re-saves the task, the Map's ObjId must be reused (not
+        // replaced with a fresh put_object). Otherwise two devices' new
+        // comments land in two distinct Maps and Automerge merge picks
+        // one as the winner — silently dropping the other.
+        let mut base = TaskDoc::new().unwrap();
+        base.apply_json(&json!({
+            "tasks": [{
+                "id": "t1", "list": "inbox", "title": "with comments",
+                "created": 1_i64,
+                "comments": {
+                    "c1": { "id": "c1", "author": "A", "text": "first",
+                            "createdAt": 100_i64 }
+                }
+            }],
+            "projects": [], "contexts": []
+        })).unwrap();
+        let bytes = base.to_bytes();
+
+        let mut a = TaskDoc::from_bytes(&bytes).unwrap();
+        let mut b = TaskDoc::from_bytes(&bytes).unwrap();
+
+        // Device A adds c2 via a snapshot save.
+        let mut sa = a.to_json();
+        sa["tasks"][0]["comments"]["c2"] = json!({
+            "id": "c2", "author": "A", "text": "from A", "createdAt": 200_i64
+        });
+        a.apply_json(&sa).unwrap();
+
+        // Device B adds c3.
+        let mut sb = b.to_json();
+        sb["tasks"][0]["comments"]["c3"] = json!({
+            "id": "c3", "author": "B", "text": "from B", "createdAt": 300_i64
+        });
+        b.apply_json(&sb).unwrap();
+
+        // After merge, both new comments must survive (they share the
+        // base Map's ObjId so commentId-keyed inserts don't collide).
+        a.merge(&mut b).unwrap();
+        let out = a.to_json();
+        let t = &out["tasks"].as_array().unwrap()[0];
+        let comments = t["comments"].as_object().unwrap();
+        assert_eq!(comments.len(), 3, "c1 + c2 + c3 all preserved");
+        assert!(comments.contains_key("c1"));
+        assert!(comments.contains_key("c2"));
+        assert!(comments.contains_key("c3"));
     }
 }

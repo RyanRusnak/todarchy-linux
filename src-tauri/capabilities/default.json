@@ -12,6 +12,7 @@
     "notification:default",
     "dialog:default",
     "fs:default",
+    "deep-link:default",
     {
       "identifier": "fs:scope",
       "allow": [

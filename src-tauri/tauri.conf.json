@@ -44,6 +44,11 @@
     }
   },
   "plugins": {
-    "shell": { "open": true }
+    "shell": { "open": true },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["todarchy"]
+      }
+    }
   }
 }

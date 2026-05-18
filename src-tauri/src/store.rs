@@ -91,8 +91,17 @@ pub async fn load(app: &AppHandle) -> Result<Value> {
         }
     }
 
-    let json = doc.to_json();
-    // Keep tasks.json up to date as the CLI/Waybar-facing view.
+    // If sharing is set up, fold each opened shared file's
+    // authoritative tasks + project metadata into the projection. The
+    // unioned view is what the frontend renders and what the CLI/Waybar
+    // see via tasks.json.
+    let json = match crate::shared::current_manager().ok().flatten() {
+        Some(manager) => manager.load_union(&doc).unwrap_or_else(|e| {
+            tracing::warn!("load_union failed, falling back to main doc only: {e}");
+            doc.to_json()
+        }),
+        None => doc.to_json(),
+    };
     write_json_view(&json).await?;
     Ok(json)
 }
@@ -122,7 +131,20 @@ pub async fn save(app: &AppHandle, data: Value) -> Result<()> {
         }
     }
 
-    doc.apply_json(&data)?;
+    // Partition the incoming snapshot. Tasks whose `list` belongs to
+    // a shared project are routed into that project's encrypted file;
+    // the main doc only sees the remainder. The project records stay
+    // in BOTH the main doc (as stubs for sidebar rendering on peers
+    // without the key) and the shared file (authoritative copy).
+    let main_data = match crate::shared::current_manager().ok().flatten() {
+        Some(manager) => manager.save_split(&data).unwrap_or_else(|e| {
+            tracing::warn!("save_split failed, applying snapshot as-is: {e}");
+            data.clone()
+        }),
+        None => data.clone(),
+    };
+
+    doc.apply_json(&main_data)?;
     doc.save(&local_path)?;
     if let Some(ref sp) = sync_path {
         if let Err(e) = doc.save_overwrite(sp) {
@@ -130,9 +152,13 @@ pub async fn save(app: &AppHandle, data: Value) -> Result<()> {
         }
     }
 
-    // Regenerate the JSON view from the merged doc so CLI/Waybar see the
-    // same state the GUI sees.
-    write_json_view(&doc.to_json()).await?;
+    // Regenerate the unioned JSON view so CLI/Waybar see the same state
+    // the GUI sees (main doc + every opened shared store overlaid).
+    let projection = match crate::shared::current_manager().ok().flatten() {
+        Some(manager) => manager.load_union(&doc).unwrap_or_else(|_| doc.to_json()),
+        None => doc.to_json(),
+    };
+    write_json_view(&projection).await?;
 
     // Report status — only if a sync folder is configured.
     if sync_path.is_some() {

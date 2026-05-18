@@ -66,13 +66,20 @@ pub fn save(cfg: &Config) -> Result<()> {
 /// Return the resolved `<sync_folder>/tasks.automerge` path if sync is
 /// configured. The folder is created on demand.
 pub fn sync_doc_path() -> Result<Option<PathBuf>> {
+    Ok(sync_folder()?.map(|f| f.join("tasks.automerge")))
+}
+
+/// Return the sync folder path if configured (and non-empty). Used by
+/// the shared-project subsystem to locate `shared_<id>.automerge.enc`
+/// files as siblings of `tasks.automerge`.
+pub fn sync_folder() -> Result<Option<PathBuf>> {
     let cfg = load()?;
     if cfg.sync_folder.trim().is_empty() {
         return Ok(None);
     }
-    let folder = Path::new(&cfg.sync_folder);
+    let folder = Path::new(&cfg.sync_folder).to_path_buf();
     if !folder.exists() {
-        std::fs::create_dir_all(folder).ok();
+        std::fs::create_dir_all(&folder).ok();
     }
-    Ok(Some(folder.join("tasks.automerge")))
+    Ok(Some(folder))
 }

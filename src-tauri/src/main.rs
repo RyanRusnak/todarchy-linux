@@ -16,6 +16,11 @@ mod sync_watcher;
 mod notify;
 mod doc;
 mod config;
+mod cryptobox;
+mod sharelink;
+mod keystore;
+mod per_project;
+mod shared;
 
 use tauri::AppHandle;
 
@@ -54,6 +59,10 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // Handles `todarchy://share/...` URLs opened from a browser
+        // or another app. Routed to share_accept via an OnOpenUrl
+        // event listener registered in the setup hook below.
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -79,6 +88,27 @@ fn main() {
                 sync_watcher::run_loop(handle3).await;
             });
 
+            // Route `todarchy://share/...` URLs (opened from a browser
+            // or another app) to the share_accept command. The user
+            // sees the project pop into their sidebar without having
+            // to paste the link into the UI.
+            let handle4 = app.handle().clone();
+            use tauri_plugin_deep_link::DeepLinkExt;
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    let url_str = url.to_string();
+                    if !url_str.starts_with("todarchy://share/") {
+                        continue;
+                    }
+                    let handle = handle4.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = shared::share_accept(handle, url_str.clone()).await {
+                            tracing::warn!("share_accept failed for {url_str}: {e}");
+                        }
+                    });
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -91,6 +121,9 @@ fn main() {
             sync::set_sync_folder,
             sync::clear_sync_folder,
             sync::get_sync_status,
+            shared::share_promote,
+            shared::share_accept,
+            shared::share_leave,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
