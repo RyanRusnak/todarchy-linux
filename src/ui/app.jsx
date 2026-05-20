@@ -14,6 +14,7 @@ import { loadStore, saveStore, deleteIdsInStore } from './storage.jsx';
 import {
   pickSyncFolder, clearSyncFolder, getSyncFolder, getSyncStatus,
   promoteProject, acceptShareLink, leaveSharedProject, copyToClipboard,
+  setServerSync, clearServerSync, serverHealthz,
 } from './sync-commands.jsx';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 import {
@@ -289,6 +290,7 @@ function App() {
   const [syncFolder, setSyncFolder] = aUseState('');
   const [syncStatus, setSyncStatus] = aUseState({
     folder: '', last_synced_at: null, last_sync_error: null,
+    server_base_url: '', server_main_doc_id: '',
   });
   aUseEffect(() => {
     getSyncStatus().then((s) => {
@@ -313,6 +315,8 @@ function App() {
         folder: payload.folder || '',
         last_synced_at: payload.last_synced_at ?? null,
         last_sync_error: payload.last_sync_error ?? null,
+        server_base_url: payload.server_base_url || '',
+        server_main_doc_id: payload.server_main_doc_id || '',
       });
       setSyncFolder(payload.folder || '');
     }).then((fn) => unsubs.push(fn));
@@ -774,9 +778,83 @@ function App() {
         hint: shortenPath(syncFolder),
         run: () => clearSyncFolder(flashToast),
       }] : []),
-      { id: "sync-status", title: syncFolder ? `sync: on — ${shortenPath(syncFolder)}` : "sync: off (local only)",
+      // HTTP relay (server) sync — an alternative transport that talks
+      // to a self-hosted todarchy-server. Set base URL + optional main
+      // doc id; share the doc id with every other device of yours so
+      // they pull/push the same blob.
+      { id: "sync-server-set",
+        title: syncStatus.server_base_url
+          ? `sync: change server… (now: ${syncStatus.server_base_url})`
+          : "sync: use a server…",
+        hint: "https://your.server — pushes to /doc/:id",
+        run: async () => {
+          const defaultUrl = syncStatus.server_base_url || "https://";
+          const url = window.prompt("server base URL", defaultUrl);
+          if (!url) return;
+          const existing = syncStatus.server_main_doc_id || "";
+          const docId = window.prompt(
+            "main doc id (leave blank to mint a fresh one — share with your other devices)",
+            existing,
+          );
+          if (docId == null) return;
+          try {
+            const result = await setServerSync(url, docId || undefined);
+            flashToast(`server sync on — id ${result.main_doc_id}`);
+            // Surface the freshly-minted doc id so the user can paste
+            // it into their other devices.
+            await copyToClipboard(result.main_doc_id);
+            window.alert(
+              `Server sync configured.\n\nBase URL: ${result.base_url}\nMain doc id: ${result.main_doc_id}\n\nThe doc id has been copied to your clipboard. Paste it on every other device you want to sync.`,
+            );
+          } catch (e) {
+            flashToast(`server sync failed: ${e}`);
+          }
+        } },
+      ...(syncStatus.server_base_url ? [{
+        id: "sync-server-copy-id",
+        title: "sync: copy main doc id",
+        hint: syncStatus.server_main_doc_id,
+        run: async () => {
+          const ok = await copyToClipboard(syncStatus.server_main_doc_id || "");
+          flashToast(ok ? "copied main doc id" : `id: ${syncStatus.server_main_doc_id}`);
+        },
+      }, {
+        id: "sync-server-health",
+        title: "sync: check server health",
+        hint: syncStatus.server_base_url,
+        run: async () => {
+          const ok = await serverHealthz();
+          flashToast(ok ? "server: reachable" : "server: unreachable");
+        },
+      }, {
+        id: "sync-server-clear",
+        title: "sync: turn off server",
+        hint: "stops pushing/pulling but keeps the local doc",
+        run: async () => {
+          try {
+            await clearServerSync();
+            flashToast("server sync off");
+          } catch (e) {
+            flashToast(`clear failed: ${e}`);
+          }
+        },
+      }] : []),
+      { id: "sync-status",
+        title: syncStatus.server_base_url
+          ? `sync: server — ${syncStatus.server_base_url}`
+          : syncFolder
+          ? `sync: folder — ${shortenPath(syncFolder)}`
+          : "sync: off (local only)",
         hint: "info",
-        run: () => flashToast(syncFolder ? `syncing to ${syncFolder}` : "no sync folder set") },
+        run: () => {
+          if (syncStatus.server_base_url) {
+            flashToast(`server ${syncStatus.server_base_url} (id ${syncStatus.server_main_doc_id})`);
+          } else if (syncFolder) {
+            flashToast(`syncing to ${syncFolder}`);
+          } else {
+            flashToast("no sync configured");
+          }
+        } },
       { id: "clear-done",  title: "clear completed (hard delete)", run: () => {
         pushUndo(tasks);
         const doneIds = tasks.filter(t => t.doneAt).map(t => t.id);

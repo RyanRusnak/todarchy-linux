@@ -39,6 +39,10 @@ rand = "0.8"
 keyring = "3"
 # URL scheme handler for todarchy:// share links
 tauri-plugin-deep-link = "2"
+# HTTP relay client for server-sync mode (alternative transport to a
+# shared sync folder). Rustls so we don't pull OpenSSL onto the build
+# host. Targets the `todarchy-server` repo's protocol.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 # utility
 once_cell = "1"
 tracing = "0.1"
@@ -47,6 +51,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [dev-dependencies]
 # Used by per_project.rs tests for isolated temporary sync folders.
 tempfile = "3"
+# Spins up real HTTP endpoints in process for server_client.rs tests.
+wiremock = "0.6"
 
 [features]
 default = ["custom-protocol"]

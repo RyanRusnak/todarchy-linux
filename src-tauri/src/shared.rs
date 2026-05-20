@@ -361,6 +361,35 @@ impl SharedProjectManager {
         Ok(total)
     }
 
+    /// Merge an encrypted envelope (just fetched from the relay) into
+    /// the opened per-project store for `project_id`. Lazy-opens the
+    /// store if it isn't cached yet, so a server-pull that arrives
+    /// before the file watcher fires still lands correctly.
+    pub fn absorb_remote_envelope(&self, project_id: &str, bytes: &[u8]) -> Result<bool> {
+        let key = match self.key_store.load(project_id)? {
+            Some(k) => k,
+            None => return Ok(false),
+        };
+        let path = self.file_path(project_id);
+        self.with_store(project_id, &key, &path, |store| store.merge_encrypted(bytes))
+    }
+
+    /// Return the on-disk envelope bytes for every shared project this
+    /// device has opened (or has a file for). Used by the server-sync
+    /// push path: each envelope is sent to `/doc/<project_id>` after a
+    /// local save so peers can pull updates from the relay.
+    pub fn opened_envelope_bytes(&self) -> Vec<(String, Vec<u8>)> {
+        let opened = self.opened.lock().unwrap();
+        opened
+            .iter()
+            .filter_map(|(pid, store)| {
+                std::fs::read(store.file_path())
+                    .ok()
+                    .map(|bytes| (pid.clone(), bytes))
+            })
+            .collect()
+    }
+
     // MARK: - Internals
 
     /// Run `f` against a `&mut PerProjectStore`, opening the store lazily

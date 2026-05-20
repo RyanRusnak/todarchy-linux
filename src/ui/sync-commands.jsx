@@ -83,6 +83,31 @@ export async function leaveSharedProject(projectId) {
   return invoke('share_leave', { projectId });
 }
 
+// ---------- HTTP relay sync mode ----------
+//
+// Alternative transport to the file-sync folder. The user points the
+// app at a self-hosted todarchy-server instance; we PUT the latest
+// main-doc bytes there on every save and pull peer changes back on
+// load + 10-second poll. Each shared project's encrypted envelope
+// rides along on the same relay using its project id as the doc id.
+
+export async function setServerSync(baseUrl, mainDocId) {
+  return invoke('set_server_sync', { baseUrl, mainDocId: mainDocId || null });
+}
+
+export async function clearServerSync() {
+  return invoke('clear_server_sync');
+}
+
+export async function serverHealthz() {
+  try {
+    return await invoke('server_healthz');
+  } catch (e) {
+    console.warn('server_healthz failed:', e);
+    return false;
+  }
+}
+
 /// Copy `text` to the clipboard. Uses navigator.clipboard when available
 /// (Tauri webview supports it on Linux); falls back to a hidden textarea
 /// + document.execCommand for older webviews.

@@ -21,6 +21,7 @@ use tauri::AppHandle;
 use tokio::fs;
 
 use crate::doc::TaskDoc;
+use crate::server_client::ServerSyncClient;
 
 fn data_dir() -> Result<PathBuf> {
     let home = dirs::data_local_dir()
@@ -48,6 +49,18 @@ fn tasks_json_path() -> Result<PathBuf> {
 pub async fn load(app: &AppHandle) -> Result<Value> {
     let local_path = automerge_path()?;
     let mut doc = TaskDoc::load(&local_path)?;
+
+    // Server-relay mode: pull the remote main doc + every opened shared
+    // file from the relay before any local merge runs. Treated like
+    // another sync transport — does NOT supersede a configured sync
+    // folder; folder + server can both be active and converge through
+    // the same Automerge merges.
+    if let Some((base, doc_id)) = crate::config::server_config()? {
+        match pull_from_server(&base, &doc_id, &mut doc).await {
+            Ok(()) => crate::sync::record_success(app),
+            Err(e) => crate::sync::record_error(app, format!("server pull: {e}")),
+        }
+    }
 
     // Fold in whatever the sync folder has (if configured). Every branch
     // reports to the `sync-status` event so the UI reflects reality.
@@ -152,6 +165,16 @@ pub async fn save(app: &AppHandle, data: Value) -> Result<()> {
         }
     }
 
+    // Mirror the freshly-saved bytes to the relay if server-sync is on.
+    // Unconditional PUT — matches the iOS app's "local-first; always
+    // overwrite the server" semantics. Concurrent peer edits get
+    // reconciled via Automerge on the next pull.
+    if let Some((base, doc_id)) = crate::config::server_config()? {
+        if let Err(e) = push_to_server(&base, &doc_id, &mut doc).await {
+            sync_error.get_or_insert_with(|| format!("server push: {e}"));
+        }
+    }
+
     // Regenerate the unioned JSON view so CLI/Waybar see the same state
     // the GUI sees (main doc + every opened shared store overlaid).
     let projection = match crate::shared::current_manager().ok().flatten() {
@@ -223,5 +246,79 @@ async fn write_json_view(data: &Value) -> Result<()> {
     let pretty = serde_json::to_vec_pretty(data)?;
     fs::write(&tmp, &pretty).await?;
     fs::rename(&tmp, &path).await?;
+    Ok(())
+}
+
+/// Pull the main doc (and every opened shared envelope) from the relay
+/// and merge their bytes into `doc` / the per-project stores. Errors
+/// from individual GETs are logged but don't abort the rest — partial
+/// progress is better than none.
+async fn pull_from_server(base_url: &str, main_doc_id: &str, doc: &mut TaskDoc) -> Result<()> {
+    let client = ServerSyncClient::new(base_url)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if let Some((bytes, _etag)) = client
+        .get(main_doc_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    {
+        let mut remote = TaskDoc::from_bytes(&bytes)
+            .with_context(|| "parsing main-doc bytes from server")?;
+        doc.merge(&mut remote)
+            .with_context(|| "merging server main-doc bytes into local doc")?;
+    }
+
+    // Per-project shared envelopes: pull each one we have a key for and
+    // merge through the SharedProjectManager so the doc-of-record on
+    // disk stays in lockstep with the server. The manager owns the
+    // decrypt step and the merge into the in-memory shared store.
+    if let Some(manager) = crate::shared::current_manager()? {
+        let projection = doc.to_json();
+        let shared_pids: Vec<String> = projection
+            .get("projects")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter(|p| p.get("isShared").and_then(|v| v.as_bool()).unwrap_or(false))
+                    .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for pid in shared_pids {
+            if !manager.has_key(&pid) { continue; }
+            match client.get(&pid).await {
+                Ok(Some((bytes, _etag))) => {
+                    if let Err(e) = manager.absorb_remote_envelope(&pid, &bytes) {
+                        tracing::warn!("server pull for shared {pid} failed to merge: {e}");
+                    }
+                }
+                Ok(None) => { /* no remote yet, or 304 */ }
+                Err(e) => {
+                    tracing::warn!("server GET shared {pid} failed: {e}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Push the main doc bytes to the relay. Also pushes every opened
+/// shared envelope — same unconditional semantics as iOS. Errors are
+/// surfaced to the caller (which folds them into sync-status).
+async fn push_to_server(base_url: &str, main_doc_id: &str, doc: &mut TaskDoc) -> Result<()> {
+    let client = ServerSyncClient::new(base_url)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let bytes = doc.to_bytes();
+    client
+        .put(main_doc_id, bytes)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if let Some(manager) = crate::shared::current_manager()? {
+        for (pid, bytes) in manager.opened_envelope_bytes() {
+            if let Err(e) = client.put(&pid, bytes).await {
+                tracing::warn!("server PUT shared {pid} failed: {e}");
+            }
+        }
+    }
     Ok(())
 }

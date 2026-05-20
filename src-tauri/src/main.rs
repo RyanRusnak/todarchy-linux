@@ -21,6 +21,7 @@ mod sharelink;
 mod keystore;
 mod per_project;
 mod shared;
+mod server_client;
 
 use tauri::AppHandle;
 
@@ -88,6 +89,15 @@ fn main() {
                 sync_watcher::run_loop(handle3).await;
             });
 
+            // Server-relay polling. Independent of the folder watcher
+            // above — server mode can run instead of, or alongside, a
+            // sync folder. Hits the relay every 10 s when configured;
+            // sleeps cheaply when it isn't.
+            let handle3b = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                sync_watcher::server_poll_loop(handle3b).await;
+            });
+
             // Route `todarchy://share/...` URLs (opened from a browser
             // or another app) to the share_accept command. The user
             // sees the project pop into their sidebar without having
@@ -121,6 +131,9 @@ fn main() {
             sync::set_sync_folder,
             sync::clear_sync_folder,
             sync::get_sync_status,
+            sync::set_server_sync,
+            sync::clear_server_sync,
+            sync::server_healthz,
             shared::share_promote,
             shared::share_accept,
             shared::share_leave,

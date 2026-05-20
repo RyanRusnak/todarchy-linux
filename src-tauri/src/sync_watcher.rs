@@ -128,6 +128,51 @@ fn interesting(ev: &notify::Result<Event>) -> bool {
     })
 }
 
+/// Foreground polling loop for server-relay sync mode. Runs forever
+/// (spawned from main.rs); when the user hasn't configured a server, it
+/// sleeps and re-checks. When a server is configured, it calls
+/// `store::load` every 10 s — that pulls the latest bytes from the
+/// relay, merges them, emits `tasks-changed` if anything moved, and
+/// updates the sync-status indicator.
+///
+/// Matches iOS's 10-second poll cadence. Steady-state cost is one
+/// 304-cached round trip per tick.
+pub async fn server_poll_loop(app: AppHandle) {
+    let mut last_emitted_heads: Option<Vec<automerge::ChangeHash>> = None;
+    loop {
+        let configured = app_config::server_config().ok().flatten().is_some();
+        if !configured {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        }
+        match crate::store::load(&app).await {
+            Ok(json) => {
+                // Detect "did anything change?" by comparing heads on the
+                // local Automerge doc. Cheaper than diffing the JSON, and
+                // it side-steps spurious tasks-changed emissions when the
+                // poll only confirms we're already up to date.
+                let heads_now = crate::doc::default_doc_path()
+                    .ok()
+                    .and_then(|p| TaskDoc::load(&p).ok())
+                    .map(|d| d.heads());
+                let changed = match (&last_emitted_heads, &heads_now) {
+                    (Some(a), Some(b)) => a != b,
+                    (None, Some(_)) => true,
+                    _ => false,
+                };
+                if changed {
+                    let _ = app.emit("tasks-changed", &json);
+                }
+                last_emitted_heads = heads_now;
+            }
+            Err(e) => {
+                tracing::warn!("server poll: load failed: {e}");
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    }
+}
+
 async fn apply_sync_update(app: &AppHandle) -> Result<()> {
     let Some(sync_path) = app_config::sync_doc_path()? else { return Ok(()); };
     if !sync_path.exists() { return Ok(()); }
