@@ -135,6 +135,89 @@ export function parseQuickAdd(raw) {
   return t;
 }
 
+// Natural-language defer parser — mirrors the macOS `DeferParser` so the two
+// platforms accept the same typed input. Returns a timestamp (ms) at 09:00
+// local time for relative forms, or null when the text isn't recognized.
+//   today · tomorrow / tmrw · +3d / +1w / +1m · mon..sun · weekend ·
+//   next week · YYYY-MM-DD
+const DEFER_WEEKDAYS = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+function deferAtNine(date) {
+  date.setHours(9, 0, 0, 0);
+  return date.getTime();
+}
+function deferNextDow(targetDow) {
+  const d = new Date();
+  const delta = (targetDow - d.getDay() + 7) % 7 || 7; // always strictly ahead
+  d.setDate(d.getDate() + delta);
+  return deferAtNine(d);
+}
+export function parseDeferText(input) {
+  const s = (input || "").trim().toLowerCase();
+  if (!s) return null;
+
+  if (s === "today") return deferAtNine(new Date());
+  if (s === "tomorrow" || s === "tmrw") {
+    const d = new Date(); d.setDate(d.getDate() + 1); return deferAtNine(d);
+  }
+  if (s === "weekend" || s === "this weekend") return deferNextDow(6); // saturday
+  if (s === "next week") return deferNextDow(1);                       // monday
+
+  // +Nd / +Nw / +Nm
+  const rel = s.match(/^\+(\d+)\s*([dwm])$/);
+  if (rel) {
+    const n = parseInt(rel[1], 10);
+    const d = new Date();
+    if (rel[2] === "d") d.setDate(d.getDate() + n);
+    else if (rel[2] === "w") d.setDate(d.getDate() + n * 7);
+    else d.setMonth(d.getMonth() + n);
+    return deferAtNine(d);
+  }
+
+  // weekday abbreviation
+  if (Object.prototype.hasOwnProperty.call(DEFER_WEEKDAYS, s)) {
+    return deferNextDow(DEFER_WEEKDAYS[s]);
+  }
+
+  // ISO date YYYY-MM-DD
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const [, y, m, day] = iso.map(Number);
+    const d = new Date(y, m - 1, day);
+    // reject impossible dates (e.g. 2025-02-31 rolling over)
+    if (d.getFullYear() === y && d.getMonth() === m - 1 && d.getDate() === day) {
+      return deferAtNine(d);
+    }
+  }
+
+  return null;
+}
+
+// Export the store as a human-readable Markdown checklist, grouped by list.
+// Mirrors macOS `ExportImport.exportMarkdown`.
+export function exportMarkdown(tasks, projects, now = Date.now()) {
+  const lines = [`# todarchy — ${new Date(now).toISOString()}`, ""];
+  const heading = (listId) =>
+    listId === "inbox" ? "inbox" : (projects.find(p => p.id === listId)?.name || listId);
+  const listIds = ["inbox", ...projects.map(p => p.id)];
+  for (const listId of listIds) {
+    const forList = tasks.filter(t => t.list === listId);
+    if (forList.length === 0) continue;
+    lines.push(`## ${heading(listId)}`, "");
+    for (const task of forList) {
+      const box = task.doneAt ? "[x]" : "[ ]";
+      let title = task.title || "";
+      if (task.ctx) title += ` ${task.ctx}`;
+      if (task.due) title += ` !${task.due === "this week" ? "week" : task.due}`;
+      lines.push(`- ${box} ${title}`);
+      if (task.note) {
+        for (const line of String(task.note).split("\n")) lines.push(`  > ${line}`);
+      }
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
 export function timeAgo(ts) {
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 60) return s + "s";

@@ -7,6 +7,7 @@ import {
   useRef as aUseRef,
   useCallback as aUseCb,
 } from 'react';
+import { marked } from 'marked';
 import { Icon } from './icons.jsx';
 import { Palette } from './palette.jsx';
 import { useOmarchyTheme } from '../theme/useOmarchyTheme';
@@ -27,11 +28,15 @@ import {
   nid,
   fuzzyScore,
   parseQuickAdd,
+  parseDeferText,
+  exportMarkdown,
   timeAgo,
   formatDeferUntil,
   getCommentAuthor,
   setCommentAuthor,
 } from './data.jsx';
+import { invoke } from '@tauri-apps/api/core';
+import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
 
 // Sync status indicator for the status bar. Three visual states:
 //   - local   — no sync folder configured
@@ -208,6 +213,11 @@ function App() {
   aUseEffect(() => { localStorage.setItem("gtd.showDone", showDone ? "1" : "0"); }, [showDone]);
   const [showDeferred, setShowDeferred] = aUseState(() => localStorage.getItem("gtd.showDeferred") === "1");
   aUseEffect(() => { localStorage.setItem("gtd.showDeferred", showDeferred ? "1" : "0"); }, [showDeferred]);
+  // "next" focus mode — shows only the single top task of the active list.
+  // Together with showDone/showDeferred this drives the todo/next/all chip,
+  // matching the macOS list-mode cycle.
+  const [limitToFirst, setLimitToFirst] = aUseState(() => localStorage.getItem("gtd.limitToFirst") === "1");
+  aUseEffect(() => { localStorage.setItem("gtd.limitToFirst", limitToFirst ? "1" : "0"); }, [limitToFirst]);
 
   const [cursor, setCursor] = aUseState(0);     // index within current list
   const [quickAdd, setQuickAdd] = aUseState(false);
@@ -446,8 +456,9 @@ function App() {
       }
     };
     walk(null, 0);
-    return out;
-  }, [tasks, activeList, search, ctxFilter, showDone, showDeferred, nowTick, collapsed]);
+    // "next" mode: collapse the view down to just the top task of the list.
+    return limitToFirst ? out.slice(0, 1) : out;
+  }, [tasks, activeList, search, ctxFilter, showDone, showDeferred, limitToFirst, nowTick, collapsed]);
 
   aUseEffect(() => {
     setCursor(c => Math.max(0, Math.min(c, Math.max(0, viewTasks.length - 1))));
@@ -721,6 +732,19 @@ function App() {
     flashToast("project deleted");
   };
 
+  // List-view mode chip — derived from the three view booleans, cycled
+  // todo → next → all → todo (matches the macOS header chip).
+  const listMode = limitToFirst ? "next" : (showDone && showDeferred) ? "all" : "todo";
+  const cycleListMode = () => {
+    if (listMode === "todo") {          // → next
+      setLimitToFirst(true); setShowDone(false); setShowDeferred(false);
+    } else if (listMode === "next") {   // → all
+      setLimitToFirst(false); setShowDone(true); setShowDeferred(true);
+    } else {                            // all → todo
+      setLimitToFirst(false); setShowDone(false); setShowDeferred(false);
+    }
+  };
+
   // ---------- Commands ----------
   const commands = aUseMemo(() => {
     const projectCommands = projects.flatMap(p => [
@@ -737,6 +761,7 @@ function App() {
         if (activeList === "inbox") { flashToast("inbox can't be edited"); return; }
         setProjEditorFocus(activeList); setProjEditor(true);
       } },
+      { id: "list-mode", title: `list view: ${listMode} → ${listMode === "todo" ? "next" : listMode === "next" ? "all" : "todo"}`, hint: "todo / next / all", run: () => cycleListMode() },
       { id: "toggle-done",     title: (showDone ? "hide" : "show") + " completed",  hint: "filter", keys: ["f","d"], run: () => setShowDone(v => !v) },
       { id: "toggle-deferred", title: (showDeferred ? "hide" : "show") + " deferred", hint: "filter", keys: ["f","s"], run: () => setShowDeferred(v => !v) },
       { id: "add",         title: "new task",       hint: "quick-add", keys: ["↵", "o"], run: () => openQuickAdd() },
@@ -747,12 +772,12 @@ function App() {
       { id: "reorder-down", title: "move task down in list", hint: "reorder", keys: ["⇧J"], run: () => moveCursorTask("down") },
       { id: "collapse",    title: "collapse / expand children", hint: "tree", keys: ["z"], run: () => currentTask && currentTask._hasChildren && toggleCollapsed(currentTask.id) },
       { id: "move-inbox",  title: "move → inbox",   keys: ["m","i"], run: () => currentTask && moveToList(currentTask.id, "inbox") },
-      { id: "defer",       title: "defer task…",    hint: "pick when", keys: ["s"], run: () => currentTask && openDefer(currentTask.id) },
-      { id: "defer-tomorrow", title: "defer → tomorrow 9am", keys: ["s","t"], run: () => currentTask && deferTask(currentTask.id, defer9am(1), "tomorrow 09:00") },
-      { id: "defer-week",     title: "defer → next week",    keys: ["s","w"], run: () => currentTask && deferTask(currentTask.id, defer9am(7), "next week") },
+      { id: "defer",       title: "defer task…",    hint: "pick when", keys: ["d"], run: () => currentTask && openDefer(currentTask.id) },
+      { id: "defer-tomorrow", title: "defer → tomorrow 9am", run: () => currentTask && deferTask(currentTask.id, defer9am(1), "tomorrow 09:00") },
+      { id: "defer-week",     title: "defer → next week",    run: () => currentTask && deferTask(currentTask.id, defer9am(7), "next week") },
       { id: "defer-weekend",  title: "defer → saturday",     run: () => currentTask && deferTask(currentTask.id, deferNextWeekday(6), "saturday 09:00") },
       { id: "defer-clear",    title: "un-defer", run: () => currentTask && clearDefer(currentTask.id) },
-      { id: "delete",      title: "delete task",    keys: ["d","d"], run: () => currentTask && deleteTask(currentTask.id) },
+      { id: "delete",      title: "delete task",    keys: ["Del"], run: () => currentTask && deleteTask(currentTask.id) },
       { id: "edit",        title: "edit task",      keys: ["e"], run: () => currentTask && beginEdit(currentTask) },
       { id: "undo",        title: "undo last",      keys: ["u"], run: () => undo() },
       { id: "search",      title: "search tasks",   keys: ["/"], run: () => openSearch() },
@@ -855,6 +880,9 @@ function App() {
             flashToast("no sync configured");
           }
         } },
+      { id: "export-json", title: "export → JSON…", hint: "round-trippable backup", run: () => exportJSON() },
+      { id: "export-md",   title: "export → Markdown…", hint: "human-readable checklist", run: () => exportMD() },
+      { id: "import-json", title: "import ← JSON…", hint: "merges by id (additive)", run: () => importJSON() },
       { id: "clear-done",  title: "clear completed (hard delete)", run: () => {
         pushUndo(tasks);
         const doneIds = tasks.filter(t => t.doneAt).map(t => t.id);
@@ -923,7 +951,63 @@ function App() {
           }
         } },
     ];
-  }, [currentTask, tasks, activeList, projects, showDone, showDeferred, showDetail, contexts, sync.account, syncFolder]);
+  }, [currentTask, tasks, activeList, projects, showDone, showDeferred, limitToFirst, showDetail, contexts, sync.account, syncFolder]);
+
+  // ---------- Export / import ----------
+  // JSON is round-trippable (the same {version,tasks,projects,contexts} shape
+  // the Rust store persists); Markdown is export-only. The dialog plugin picks
+  // the path; the Rust write_text_file/read_text_file commands do the I/O so we
+  // aren't constrained by the fs plugin's scoped allowlist.
+  const exportJSON = async () => {
+    try {
+      const path = await saveDialog({
+        defaultPath: "todarchy-export.json",
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      const doc = { version: 1, tasks, projects, contexts };
+      await invoke("write_text_file", { path, contents: JSON.stringify(doc, null, 2) });
+      flashToast("exported JSON");
+    } catch (e) { flashToast(`export failed: ${e}`); }
+  };
+  const exportMD = async () => {
+    try {
+      const path = await saveDialog({
+        defaultPath: "todarchy-export.md",
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+      });
+      if (!path) return;
+      await invoke("write_text_file", { path, contents: exportMarkdown(tasks, projects) });
+      flashToast("exported Markdown");
+    } catch (e) { flashToast(`export failed: ${e}`); }
+  };
+  const importJSON = async () => {
+    try {
+      const path = await openDialog({
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      const raw = await invoke("read_text_file", { path });
+      const doc = JSON.parse(raw);
+      const inTasks = Array.isArray(doc?.tasks) ? doc.tasks : [];
+      const inProjects = Array.isArray(doc?.projects) ? doc.projects : [];
+      const inContexts = Array.isArray(doc?.contexts) ? doc.contexts : [];
+      if (!inTasks.length && !inProjects.length) { flashToast("nothing to import"); return; }
+      pushUndo(tasks);
+      // Merge by id (imported wins on conflict) so an import is additive and
+      // never silently drops tasks the file didn't know about.
+      const mergeById = (cur, next) => {
+        const m = new Map(cur.map(x => [x.id, x]));
+        for (const x of next) if (x && x.id) m.set(x.id, x);
+        return [...m.values()];
+      };
+      setTasks(ts => mergeById(ts, inTasks));
+      setProjects(ps => mergeById(ps, inProjects));
+      if (inContexts.length) setContexts(cs => [...new Set([...cs, ...inContexts])]);
+      flashToast(`imported ${inTasks.length} task${inTasks.length === 1 ? "" : "s"}`);
+    } catch (e) { flashToast(`import failed: ${e}`); }
+  };
 
   const openQuickAdd = () => { setQuickAdd(true); setQuickAddVal(""); setMode("INSERT"); };
   const closeQuickAdd = () => { setQuickAdd(false); setQuickAddVal(""); setMode("NORMAL"); };
@@ -955,7 +1039,6 @@ function App() {
       "g4": () => proj(3) && setActiveList(proj(3).id),
       "g5": () => proj(4) && setActiveList(proj(4).id),
       "gn": () => { setProjEditorFocus("add"); setProjEditor(true); },
-      "dd": () => currentTask && deleteTask(currentTask.id),
       "mi": () => currentTask && moveToList(currentTask.id, "inbox"),
       "m1": () => currentTask && proj(0) && moveToList(currentTask.id, proj(0).id),
       "m2": () => currentTask && proj(1) && moveToList(currentTask.id, proj(1).id),
@@ -966,8 +1049,9 @@ function App() {
       "fs": () => setShowDeferred(v => !v),
     };
     if (seqs[combo]) { seqs[combo](); pendingKey.current = null; clearTimeout(pendingTimer.current); return true; }
-    // first of a prefix?
-    if (["g","d","m","f"].includes(k) && !pendingKey.current) {
+    // first of a prefix? (`d` is now a single-key defer — Mac parity — so it's
+    // no longer a leader; delete moved to the Delete/Backspace key.)
+    if (["g","m","f"].includes(k) && !pendingKey.current) {
       pendingKey.current = k;
       clearTimeout(pendingTimer.current);
       pendingTimer.current = setTimeout(() => { pendingKey.current = null; }, 700);
@@ -1070,7 +1154,12 @@ function App() {
           break;
         case "e": e.preventDefault(); if (currentTask) beginEdit(currentTask); break;
         case "u": e.preventDefault(); undo(); break;
-        case "s": e.preventDefault(); if (currentTask) openDefer(currentTask.id); break;
+        case "d": e.preventDefault(); if (currentTask) openDefer(currentTask.id); break;
+        case "Delete":
+        case "Backspace":
+          e.preventDefault();
+          if (currentTask) deleteTask(currentTask.id);
+          break;
         case "/": e.preventDefault(); openSearch(); break;
         case ":": e.preventDefault(); setPaletteOpen(true); setMode("CMD"); break;
         case "1": e.preventDefault(); projects[0] && setActiveList(projects[0].id); break;
@@ -1199,8 +1288,8 @@ function App() {
               <div style={S.hintRow}><span className="kbd">x</span><span style={S.hintLabel}>complete</span></div>
               <div style={S.hintRow}><span className="kbd">o</span><span style={S.hintLabel}>new</span></div>
               <div style={S.hintRow}><span className="kbd">e</span><span style={S.hintLabel}>edit</span></div>
-              <div style={S.hintRow}><span className="kbd">d</span><span className="kbd">d</span><span style={S.hintLabel}>delete</span></div>
-              <div style={S.hintRow}><span className="kbd">s</span><span style={S.hintLabel}>defer</span></div>
+              <div style={S.hintRow}><span className="kbd">d</span><span style={S.hintLabel}>defer</span></div>
+              <div style={S.hintRow}><span className="kbd">del</span><span style={S.hintLabel}>delete</span></div>
               <div style={S.hintRow}><span className="kbd">f</span><span className="kbd">d</span><span style={S.hintLabel}>toggle done</span></div>
               <div style={S.hintRow}><span className="kbd">f</span><span className="kbd">s</span><span style={S.hintLabel}>toggle deferred</span></div>
               <div style={S.hintRow}><span className="kbd">g</span><span className="kbd">n</span><span style={S.hintLabel}>new project</span></div>
@@ -1230,6 +1319,8 @@ function App() {
               showDeferred={showDeferred}
               onToggleDone={() => setShowDone(v => !v)}
               onToggleDeferred={() => setShowDeferred(v => !v)}
+              listMode={listMode}
+              onCycleMode={cycleListMode}
             />
 
             <TaskList
@@ -1359,7 +1450,7 @@ function App() {
 
 // ---------- Sub-components ----------
 
-function Header({ activeList, total, cursor, mode, search, searchMode, onSearch, onCloseSearch, nowTick, ctxFilter, onClearCtx, projects, showDone, showDeferred, onToggleDone, onToggleDeferred }) {
+function Header({ activeList, total, cursor, mode, search, searchMode, onSearch, onCloseSearch, nowTick, ctxFilter, onClearCtx, projects, showDone, showDeferred, onToggleDone, onToggleDeferred, listMode, onCycleMode }) {
   const project = projects.find(p => p.id === activeList);
   const accent = activeList === "inbox" ? "var(--orange)" : (project?.accent || "var(--accent)");
   const label = activeList === "inbox" ? "inbox" : (project?.name || activeList);
@@ -1393,6 +1484,13 @@ function Header({ activeList, total, cursor, mode, search, searchMode, onSearch,
         <span style={S.subtle}>{desc}</span>
       </div>
       <div style={S.headerRight}>
+        <button
+          onClick={onCycleMode}
+          title={"list view: " + listMode + " — click to cycle todo / next / all"}
+          style={{ ...S.filterToggle, ...(listMode !== "todo" ? S.filterToggleActive : null) }}>
+          <span style={{ color: "var(--fg-mute)" }}>view</span>
+          <span style={{ color: listMode === "todo" ? "var(--fg-dim)" : "var(--accent)" }}>{listMode}</span>
+        </button>
         <button
           onClick={onToggleDeferred}
           title={(showDeferred ? "hide" : "show") + " deferred (f s)"}
@@ -1582,9 +1680,16 @@ function TaskList({ list, listLabel, tasks, cursor, setCursor, onToggle, editing
                     {t.title}
                   </div>
                 )}
-                {t.note && !isEditing && (
-                  <div style={S.note}>└ {t.note}</div>
-                )}
+                {t.note && !isEditing && (() => {
+                  // Show only the first line on the row. Multi-line bodies
+                  // are visible in the detail pane; cramming them into the
+                  // list breaks the one-task-per-row scanning the keyboard
+                  // nav assumes. Trim trailing whitespace so a stray space
+                  // doesn't render an ellipsis on an otherwise-empty line.
+                  const firstLine = t.note.split('\n')[0].trimEnd();
+                  if (!firstLine) return null;
+                  return <div style={S.note}>└ {firstLine}</div>;
+                })()}
               </div>
 
               <div style={S.rowMeta}>
@@ -1861,15 +1966,7 @@ function Detail({ task, onUpdate, onMove, onDelete, onDefer, onClearDefer, onAdd
         <span className="kbd" style={{ marginLeft: "auto" }}>s</span>
       </button>
 
-      <div style={{ marginTop: 20 }}>
-        <div style={S.metaKey}>note</div>
-        <textarea
-          value={task.note || ""}
-          onChange={e => onUpdate({ note: e.target.value })}
-          placeholder="// add context, links, sub-steps…"
-          style={S.textarea}
-        />
-      </div>
+      <Body task={task} onUpdate={onUpdate} />
 
       <Comments task={task} onAddComment={onAddComment} />
 
@@ -1880,6 +1977,81 @@ function Detail({ task, onUpdate, onMove, onDelete, onDefer, onClearDefer, onAdd
           <span className="kbd">d</span><span className="kbd">d</span>
         </button>
       </div>
+    </div>
+  );
+}
+
+// Long-form task description ("body" on iOS — "note" was the old field
+// name kept on the wire for backward compat). Renders as styled
+// markdown until the user clicks in to edit; ⎋ or losing focus returns
+// to the rendered preview. Mirrors the iOS TaskInspector.bodySection.
+//
+// The raw markdown is the source of truth on disk; the preview is a
+// projection. Edits are saved live (onChange → onUpdate) rather than
+// gated behind a commit button — matches everything else in the
+// inspector and keeps the iOS sync semantics intact.
+//
+// Markdown rendering uses `marked` with `breaks: true` + `gfm: true` so
+// you get hard line breaks (Enter is a line break, not a paragraph
+// break) and tables / task lists. The output goes straight into
+// dangerouslySetInnerHTML — the data is the user's own task notes from
+// their own Automerge doc, and a Tauri webview has no third-party
+// origins, so XSS isn't a meaningful threat here.
+
+marked.setOptions({ breaks: true, gfm: true });
+
+function Body({ task, onUpdate }) {
+  const [editing, setEditing] = aUseState(false);
+  const taRef = aUseRef(null);
+  const raw = task.note || "";
+  // Re-render markdown only when the source changes — keeps preview
+  // cheap on every cursor move while a sibling task is selected.
+  const html = aUseMemo(() => raw ? marked.parse(raw) : "", [raw]);
+
+  // Selecting a different task while editing should drop edit mode so
+  // the new task opens in its preview state, matching iOS's
+  // `.onChange(of: task.id)` reset.
+  aUseEffect(() => { setEditing(false); }, [task.id]);
+
+  const beginEdit = () => {
+    setEditing(true);
+    // Focus on the next tick after the textarea mounts.
+    setTimeout(() => taRef.current?.focus(), 0);
+  };
+  const stopEdit = () => setEditing(false);
+
+  return (
+    <div style={S.bodyWrap}>
+      <div style={S.bodyHeader}>
+        <span style={S.metaKey}>body</span>
+        {editing && (
+          <span style={{ color: "var(--fg-faint)", fontSize: 10.5 }}>
+            <span className="kbd">⎋</span> done
+          </span>
+        )}
+      </div>
+      {editing ? (
+        <textarea
+          ref={taRef}
+          value={raw}
+          onChange={e => onUpdate({ note: e.target.value })}
+          onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); stopEdit(); } }}
+          onBlur={stopEdit}
+          placeholder="// markdown welcome. # headings, **bold**, `code`, lists, links…"
+          style={S.bodyTextarea}
+        />
+      ) : raw.trim() ? (
+        <div
+          onClick={beginEdit}
+          className="body"
+          style={S.bodyPreview}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      ) : (
+        <button onClick={beginEdit} style={S.bodyEmpty}>
+          tap to add body…
+        </button>
+      )}
     </div>
   );
 }
@@ -2299,7 +2471,10 @@ const S = {
   },
   rowBody: { minWidth: 0, flex: 1 },
   title: { color: "var(--fg)", wordBreak: "break-word", fontSize: 14 },
-  note: { color: "var(--fg-mute)", fontSize: 12, marginTop: 2, fontStyle: "italic" },
+  note: {
+    color: "var(--fg-mute)", fontSize: 12, marginTop: 2, fontStyle: "italic",
+    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+  },
   rowMeta: {
     display: "flex", alignItems: "center", gap: 10,
     paddingTop: 1,
@@ -2389,6 +2564,47 @@ const S = {
     borderRadius: 4,
     padding: "8px 10px",
     font: "inherit", fontSize: 12.5,
+    outline: 0,
+  },
+
+  bodyWrap: {
+    display: "flex", flexDirection: "column", gap: 8,
+    marginTop: 20,
+  },
+  bodyHeader: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+  },
+  bodyTextarea: {
+    width: "100%", minHeight: 220, resize: "vertical",
+    background: "var(--bg-soft)",
+    color: "var(--fg)",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    padding: "12px 14px",
+    fontFamily: "inherit", fontSize: 13, lineHeight: 1.55,
+    outline: 0,
+  },
+  bodyPreview: {
+    width: "100%", minHeight: 80,
+    background: "var(--bg-soft)",
+    color: "var(--fg-dim)",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    padding: "12px 14px",
+    fontSize: 13, lineHeight: 1.55,
+    cursor: "text",
+    overflowWrap: "anywhere",
+  },
+  bodyEmpty: {
+    width: "100%", minHeight: 80,
+    background: "var(--bg-soft)",
+    color: "var(--fg-faint)",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    padding: "12px 14px",
+    fontFamily: "inherit", fontSize: 13, fontStyle: "italic",
+    textAlign: "left",
+    cursor: "text",
     outline: 0,
   },
   detailFooter: {
@@ -2839,7 +3055,9 @@ function DeferPicker({ task, onCancel, onConfirm }) {
   const [date, setDate] = aUseState(toInputDate(initTs));
   const [time, setTime] = aUseState(toInputTime(initTs));
   const [sel, setSel] = aUseState(0);
+  const [nl, setNl] = aUseState("");       // free-text natural-language defer
   const dateRef = aUseRef(null);
+  const nlTs = nl.trim() ? parseDeferText(nl) : null;
 
   const quickOptions = [
     { id: "later-today", label: "later today",     sub: "+3h",                 ts: () => Date.now() + 1000*60*60*3 },
@@ -2870,10 +3088,29 @@ function DeferPicker({ task, onCancel, onConfirm }) {
     if (e.key === "ArrowUp"   || (e.ctrlKey && e.key === "p")) { e.preventDefault(); setSel(s => Math.max(0, s-1)); return; }
   };
 
-  const previewTs = combineDateTime(date, time);
+  // The natural-language field is the focused entry point, so it owns the
+  // keyboard: Enter commits the parsed time (falling back to the highlighted
+  // quick option / picker), arrows still drive the list below it.
+  const onNlKey = (e) => {
+    // Stop propagation so these don't bubble to the scrim's onKey, which would
+    // re-commit the date/time picker on Enter and clobber the parsed value.
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onCancel(); return; }
+    if (e.key === "Enter") {
+      e.preventDefault(); e.stopPropagation();
+      if (nlTs) onConfirm(nlTs, nl.trim());
+      else if (sel < quickOptions.length) commitQuick(quickOptions[sel]);
+      else commitPicker();
+      return;
+    }
+    if (e.key === "ArrowDown" || (e.ctrlKey && e.key === "n")) { e.preventDefault(); e.stopPropagation(); setSel(s => Math.min(quickOptions.length, s+1)); return; }
+    if (e.key === "ArrowUp"   || (e.ctrlKey && e.key === "p")) { e.preventDefault(); e.stopPropagation(); setSel(s => Math.max(0, s-1)); return; }
+  };
+
+  // Preview prefers the typed natural-language value when present.
+  const previewTs = nl.trim() ? nlTs : combineDateTime(date, time);
 
   return (
-    <div style={dpStyles.scrim} onMouseDown={onCancel} onKeyDown={onKey} tabIndex={-1} ref={el => el && el.focus()}>
+    <div style={dpStyles.scrim} onMouseDown={onCancel} onKeyDown={onKey} tabIndex={-1}>
       <div style={dpStyles.box} onMouseDown={e => e.stopPropagation()}>
         <div style={dpStyles.head}>
           <span style={{ color: "var(--cyan)", display: "inline-flex" }}><Icon name="moon" size={14} /></span>
@@ -2883,6 +3120,23 @@ function DeferPicker({ task, onCancel, onConfirm }) {
           </span>
           <span className="kbd">esc</span>
         </div>
+
+        <div style={dpStyles.sectionLabel}>type when</div>
+        <div style={{ ...dpStyles.pickerRow, paddingBottom: 0 }}>
+          <input
+            autoFocus
+            value={nl}
+            onChange={e => setNl(e.target.value)}
+            onKeyDown={onNlKey}
+            placeholder="tomorrow · +3d · +1w · fri · weekend · 2026-07-01"
+            style={{ ...dpStyles.input, flex: 1 }}
+          />
+        </div>
+        {nl.trim() && !nlTs && (
+          <div style={{ ...dpStyles.preview, color: "var(--danger)" }}>
+            ✕ unrecognized — try “tomorrow”, “+3d”, “fri”, or a date
+          </div>
+        )}
 
         <div style={dpStyles.sectionLabel}>quick</div>
         <div style={dpStyles.list}>

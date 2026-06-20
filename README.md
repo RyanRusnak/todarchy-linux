@@ -18,7 +18,10 @@ helper is `todarchy-waybar`.
 - Vim-style keyboard control (`j/k/x/o/gg/G/...`)
 - Command palette (`Ctrl-K` or `:`)
 - Inbox + projects + contexts + due dates + deferral
+- `todo` / `next` / `all` view modes (cycle the chip in the list header)
+- Natural-language defer (`tomorrow`, `+3d`, `+1w`, `fri`, `weekend`, ISO dates)
 - Tree-nested tasks, drag-to-nest, or Tab / Shift-Tab
+- Export to JSON / Markdown and import JSON (command palette)
 - Live theme adoption from Omarchy — no config needed
 - CLI companion (`tod add "buy milk @errands !today"`)
 - Waybar module showing tasks due today
@@ -112,14 +115,14 @@ vice-versa).
 | `o` / `a` / `↵`  | quick-add a new task                          |
 | `x` / `␣` space  | toggle done                                   |
 | `e`              | edit title                                    |
-| `s`              | defer picker                                  |
+| `d`              | defer picker (type `tomorrow` / `+3d` / `fri`) |
+| `Del` / `⌫`      | delete                                        |
 | `u`              | undo                                          |
 | `/`              | search in list                                |
 | `:` / `Ctrl-K`   | command palette                                |
 | `i`              | toggle detail pane                             |
 | `Tab` / `S-Tab`  | indent / outdent (nest under sibling above)   |
 | `z`              | collapse/expand children                       |
-| `dd`             | delete                                         |
 | `fd` / `fs`      | toggle show-done / show-deferred              |
 | `gi` / `g1`-`g5` | jump to inbox / project                        |
 | `m1`..`m5`       | move task to project                           |

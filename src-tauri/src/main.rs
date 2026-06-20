@@ -50,6 +50,20 @@ fn current_theme() -> Result<theme::ThemeTokens, String> {
     theme::read_current().map_err(|e| e.to_string())
 }
 
+// Plain text file I/O for export/import. The frontend picks the path via the
+// dialog plugin, then hands it here — we write/read through std::fs so the
+// destination isn't constrained by the fs plugin's scoped allowlist (the user
+// explicitly chose the path in a save/open dialog, so it's already consented).
+#[tauri::command]
+fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(|e| format!("write {path}: {e}"))
+}
+
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -127,6 +141,8 @@ fn main() {
             delete_tasks,
             delete_projects,
             current_theme,
+            write_text_file,
+            read_text_file,
             sync::get_sync_folder,
             sync::set_sync_folder,
             sync::clear_sync_folder,
