@@ -2,7 +2,9 @@
 Type=Application
 Name=todarchy
 Comment=Keyboard-first tasks for Omarchy
-Exec=todarchy
+# Launch the TUI inside a floating terminal. --class lets the Hyprland
+# window rules in hyprland.snippet.conf float + center it.
+Exec=alacritty --class todarchy -e todarchy
 Icon=todarchy
 Terminal=false
 Categories=Utility;Office;

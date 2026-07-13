@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=todarchy share handler
+Comment=Accept todarchy:// share links
+# Headless: `todarchy accept <url>` stores the shared project's key and
+# folds its metadata into the store, then exits. No window.
+Exec=todarchy accept %u
+Icon=todarchy
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/todarchy;
+Categories=Utility;
+
+# Register this handler once, after install:
+#   xdg-mime default todarchy-accept.desktop x-scheme-handler/todarchy

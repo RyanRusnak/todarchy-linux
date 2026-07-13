@@ -1,0 +1,21 @@
+[package]
+name = "todarchy-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "MCP (Model Context Protocol) server exposing the todarchy task store"
+
+[[bin]]
+name = "todarchy-mcp"
+path = "src/main.rs"
+
+[dependencies]
+todarchy-core = { path = "../todarchy-core" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std"] }
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

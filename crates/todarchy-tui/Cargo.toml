@@ -1,0 +1,29 @@
+[package]
+name = "todarchy-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Keyboard-first, terminal-native task manager for Omarchy"
+
+[[bin]]
+name = "todarchy"
+path = "src/main.rs"
+
+[dependencies]
+todarchy-core = { path = "../todarchy-core" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+# unstable-rendered-line-info gives Paragraph::line_count for exact scroll math.
+ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
+# markdown parsing for the detail-pane note renderer.
+pulldown-cmark = { version = "0.12", default-features = false }
+# Pinned to the crossterm version ratatui 0.29 re-exports so the backend
+# and our terminal setup share one crate instance.
+crossterm = "0.28"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process"] }
+chrono = { version = "0.4", features = ["clock"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

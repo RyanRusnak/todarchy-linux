@@ -6,6 +6,6 @@
   "exec": "todarchy-waybar",
   "interval": 30,
   "return-type": "json",
-  "on-click": "todarchy-gui",
+  "on-click": "alacritty --class todarchy -e todarchy",
   "tooltip": true
 }

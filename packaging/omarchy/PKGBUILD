@@ -1,51 +1,55 @@
 # Maintainer: Ryan Rusnak <ryan@airspace.com>
 pkgname=todarchy-git
-pkgver=0.2.0.r0
+pkgver=0.3.0.r0
 pkgrel=1
-pkgdesc="Keyboard-first, Omarchy-themed task manager"
+pkgdesc="Keyboard-first, terminal-native task manager for Omarchy"
 arch=('x86_64')
 url="https://github.com/ryanrusnak/todarchy-linux"
 license=('MIT')
-depends=('webkit2gtk-4.1' 'libayatana-appindicator')
-makedepends=('rust' 'cargo' 'npm' 'git')
-provides=('todarchy' 'tod')
-# Disable makepkg's global LTO for this package. With `lto` enabled, the
-# -flto=auto C flags compile the `ring` crate's C/asm helpers as LTO bitcode,
-# which the final Rust link (ld.lld) then can't resolve — you get a wall of
-# `undefined symbol: ring_core_*`. Rust does its own codegen optimization; the
-# C-level LTO buys nothing here and only breaks the link.
-options=('!lto')
+# The TUI has no GUI runtime deps — it's a terminal app. keyring/libsecret
+# is used for shared-project keys; the rest are optional niceties.
+depends=('gcc-libs' 'libsecret')
+makedepends=('rust' 'cargo' 'git')
+optdepends=('wl-clipboard: copy share links and sync doc ids to the clipboard'
+            'libnotify: desktop notifications when deferred tasks come back'
+            'waybar: task-count module (todarchy-waybar)'
+            'alacritty: default terminal used by the .desktop launcher')
+provides=('todarchy' 'tod' 'todarchy-waybar')
 source=("git+$url.git")
 sha256sums=('SKIP')
 
 pkgver() {
   cd todarchy-linux
-  # Pull the base version out of src-tauri/Cargo.toml so -git installs
-  # reflect the real semver, not a hardcoded string that drifts. Append
-  # commit count + hash the usual -git way.
+  # Base semver comes from the workspace [workspace.package] version, then
+  # the usual -git commit count + short hash.
   local base
-  base=$(grep -m1 '^version' src-tauri/Cargo.toml | cut -d'"' -f2)
+  base=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
   printf "%s.r%s.%s" "$base" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 build() {
   cd todarchy-linux
-  npm install
-  npx tauri build --no-bundle
-  cargo build --release -p todarchy-cli -p todarchy-waybar
+  # One cargo invocation builds the whole workspace: the TUI (todarchy),
+  # the CLI (tod), and the waybar helper. No node, no webkit, no bundler.
+  cargo build --release --locked \
+    -p todarchy-tui -p todarchy-cli -p todarchy-waybar -p todarchy-mcp
 }
 
 package() {
   cd todarchy-linux
-  # Tauri GUI (package name todarchy → target/release/todarchy)
-  install -Dm755 target/release/todarchy                    "$pkgdir/usr/bin/todarchy"
+  # TUI (bin name "todarchy", from crates/todarchy-tui)
+  install -Dm755 target/release/todarchy            "$pkgdir/usr/bin/todarchy"
   # CLI companion (bin name "tod", from crates/todarchy-cli)
-  install -Dm755 target/release/tod                         "$pkgdir/usr/bin/tod"
+  install -Dm755 target/release/tod                 "$pkgdir/usr/bin/tod"
   # Waybar helper
-  install -Dm755 target/release/todarchy-waybar             "$pkgdir/usr/bin/todarchy-waybar"
-  # Desktop integration
-  install -Dm644 packaging/omarchy/todarchy.desktop         "$pkgdir/usr/share/applications/todarchy.desktop"
-  install -Dm644 src-tauri/icons/128x128.png                "$pkgdir/usr/share/icons/hicolor/128x128/apps/todarchy.png"
-  install -Dm644 src-tauri/icons/icon.png                   "$pkgdir/usr/share/icons/hicolor/512x512/apps/todarchy.png"
-  install -Dm644 LICENSE                                    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm755 target/release/todarchy-waybar     "$pkgdir/usr/bin/todarchy-waybar"
+  # Hyprland scratchpad toggle (Super+T)
+  install -Dm755 packaging/omarchy/todarchy-toggle  "$pkgdir/usr/bin/todarchy-toggle"
+  # MCP server (Model Context Protocol) for LLM access to the task store
+  install -Dm755 target/release/todarchy-mcp        "$pkgdir/usr/bin/todarchy-mcp"
+  # Desktop integration + share-link scheme handler
+  install -Dm644 packaging/omarchy/todarchy.desktop        "$pkgdir/usr/share/applications/todarchy.desktop"
+  install -Dm644 packaging/omarchy/todarchy-accept.desktop "$pkgdir/usr/share/applications/todarchy-accept.desktop"
+  install -Dm644 packaging/omarchy/todarchy.png            "$pkgdir/usr/share/icons/hicolor/128x128/apps/todarchy.png"
+  install -Dm644 LICENSE                                   "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

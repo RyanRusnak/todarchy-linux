@@ -1,16 +1,16 @@
 # todarchy-linux
 
-Keyboard-first, terminal-inspired task manager for **Omarchy** (Arch + Hyprland).
-Adopts your active Omarchy theme automatically — pick a theme from the
-Omarchy menu (or run `omarchy-theme-set "Tokyo Night"`) and the app
-re-colors live.
+Keyboard-first, terminal-native task manager for **Omarchy** (Arch + Hyprland).
+Runs as a TUI inside your terminal, so it inherits your active Omarchy theme
+automatically — pick a theme from the Omarchy menu (or run
+`omarchy-theme-set "Tokyo Night"`) and todarchy re-colors with the terminal.
+No browser engine, no config: a small static binary in a floating window.
 
 This is the Linux build; a mobile and web version are planned as separate
-repos. The binary is called `todarchy`, the CLI is `tod`, and the Waybar
-helper is `todarchy-waybar`.
+repos. The binary is called `todarchy` (the TUI), the CLI is `tod`, and the
+Waybar helper is `todarchy-waybar`. All three share one JSON store.
 
 <!-- TODO: add a real screenshot — `docs/screenshot.png` once you've taken one. -->
-<!-- The canonical design lives at `design-mocks/Beautiful todo list.html` — open it in a browser to preview the UI without launching the app. -->
 
 
 ## Features
@@ -20,40 +20,44 @@ helper is `todarchy-waybar`.
 - Inbox + projects + contexts + due dates + deferral
 - `todo` / `next` / `all` view modes (cycle the chip in the list header)
 - Natural-language defer (`tomorrow`, `+3d`, `+1w`, `fri`, `weekend`, ISO dates)
-- Tree-nested tasks, drag-to-nest, or Tab / Shift-Tab
+- Tree-nested tasks via Tab / Shift-Tab
 - Export to JSON / Markdown and import JSON (command palette)
-- Live theme adoption from Omarchy — no config needed
+- Inherits your terminal's Omarchy theme automatically — zero config
 - CLI companion (`tod add "buy milk @errands !today"`)
 - Waybar module showing tasks due today
-- Desktop notifications when deferred tasks come back
-- Local-only; end-to-end encrypted sync is planned for v0.2
+- Desktop notifications (`notify-send`) when deferred tasks come back
+- Sync across devices: a shared folder (Syncthing / Dropbox / iCloud), a
+  self-hosted relay (`todarchy-server`), and end-to-end-encrypted per-project
+  sharing — all optional, off by default (see [`docs/SYNC.md`](docs/SYNC.md))
 
 ## Install (from source)
 
-Requires `rustup` + `npm` + `webkit2gtk-4.1` + `libayatana-appindicator`
-(all already on a fresh Omarchy install).
+Requires `rustup` (plus `libsecret` for shared-project keys — already on a
+fresh Omarchy install). No Node, no WebKit.
 
 ```bash
 git clone https://github.com/ryanrusnak/todarchy-linux.git
 cd todarchy-linux
 
-npm install
-npx tauri build --no-bundle                  # GUI binary
-cargo build --release -p todarchy-cli -p todarchy-waybar
+cargo build --release          # builds todarchy (TUI), tod (CLI), todarchy-waybar
 
 # Install binaries to ~/.local/bin
 install -Dm755 target/release/todarchy        ~/.local/bin/todarchy
 install -Dm755 target/release/tod             ~/.local/bin/tod
 install -Dm755 target/release/todarchy-waybar ~/.local/bin/todarchy-waybar
 
-# Optional: desktop entry so Walker / your app launcher finds it
+# Optional: desktop entry + share-link handler so Walker / your launcher
+# finds it and todarchy:// links open the app
 install -Dm644 packaging/omarchy/todarchy.desktop \
   ~/.local/share/applications/todarchy.desktop
-install -Dm644 src-tauri/icons/128x128.png \
+install -Dm644 packaging/omarchy/todarchy-accept.desktop \
+  ~/.local/share/applications/todarchy-accept.desktop
+install -Dm644 packaging/omarchy/todarchy.png \
   ~/.local/share/icons/hicolor/128x128/apps/todarchy.png
+xdg-mime default todarchy-accept.desktop x-scheme-handler/todarchy
 ```
 
-Launch with `todarchy`, or bind it in Hyprland — see below.
+Launch by running `todarchy` in any terminal, or bind it in Hyprland — see below.
 
 ## Install (AUR PKGBUILD)
 
@@ -62,11 +66,18 @@ clean build dir and run `makepkg -si`.
 
 ## Hyprland keybind
 
-Add to `~/.config/hypr/hyprland.conf` (or drop the snippet in
-`packaging/omarchy/hyprland.snippet.conf` into your conf folder):
+todarchy is a terminal app, so `Super+T` opens it in a floating terminal
+window. Add to `~/.config/hypr/bindings.conf` + `windows.conf` (or drop the
+snippet in `packaging/omarchy/hyprland.snippet.conf` into your conf folder):
 
 ```conf
-bind = SUPER, T, exec, todarchy
+# open todarchy in a floating terminal (Alacritty here; foot/kitty/ghostty
+# equivalents are in the snippet)
+bind = SUPER, T, exec, uwsm app -- alacritty --class todarchy -e todarchy
+
+windowrule = float,  class:^(todarchy)$
+windowrule = size 900 640, class:^(todarchy)$
+windowrule = center, class:^(todarchy)$
 ```
 
 ## Waybar module
@@ -78,11 +89,41 @@ Add to your waybar config:
   "exec": "todarchy-waybar",
   "interval": 30,
   "return-type": "json",
-  "on-click": "todarchy"
+  "on-click": "alacritty --class todarchy -e todarchy"
 }
 ```
 
 And reference `custom/todarchy` in your `modules-right` (or wherever).
+
+## MCP server
+
+`todarchy-mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server (stdio transport) that lets an LLM read and edit your tasks. It drives
+the same store as everything else, so reads pull the latest state and writes
+ride your configured sync — a task Claude adds shows up on your other devices,
+and shared projects stay end-to-end encrypted.
+
+Tools: `list_projects`, `list_tasks`, `add_task`, `complete_task`,
+`update_task`, `delete_task`. Tasks can be referenced by id, 8-char id prefix,
+or a unique title substring.
+
+Register it with Claude Code:
+
+```bash
+claude mcp add todarchy -- ~/.local/bin/todarchy-mcp
+```
+
+Or in Claude Desktop's `claude_desktop_config.json`:
+
+```jsonc
+{
+  "mcpServers": {
+    "todarchy": { "command": "todarchy-mcp" }
+  }
+}
+```
+
+Then ask e.g. "add oat milk to my groceries list" or "what's on my inbox?".
 
 ## CLI cheatsheet
 
@@ -114,30 +155,60 @@ vice-versa).
 | `0` / `1`..`5`   | inbox / project 1-5                           |
 | `o` / `a` / `↵`  | quick-add a new task                          |
 | `x` / `␣` space  | toggle done                                   |
-| `e`              | edit title                                    |
+| `e`              | edit task line (title · `@context` · `!due`)  |
+| `c`              | edit note/body in `$EDITOR` (markdown)        |
+| `⇧C`             | add a comment (in `$EDITOR`)                  |
 | `d`              | defer picker (type `tomorrow` / `+3d` / `fri`) |
 | `Del` / `⌫`      | delete                                        |
 | `u`              | undo                                          |
 | `/`              | search in list                                |
 | `:` / `Ctrl-K`   | command palette                                |
 | `i`              | toggle detail pane                             |
+| `Ctrl-d`/`Ctrl-u`| scroll the detail note/comments               |
 | `Tab` / `S-Tab`  | indent / outdent (nest under sibling above)   |
 | `z`              | collapse/expand children                       |
+| `v`              | cycle view mode (todo → next → all)           |
 | `fd` / `fs`      | toggle show-done / show-deferred              |
 | `gi` / `g1`-`g5` | jump to inbox / project                        |
 | `m1`..`m5`       | move task to project                           |
 
 ## How theme adoption works
 
-Omarchy stores the active theme at `~/.config/omarchy/current/theme/`. On
-launch and whenever `omarchy-theme-set` swaps it out, the Rust watcher
-re-parses `alacritty.toml` from that directory and emits a `theme-changed`
-event. The frontend paints the tokens onto CSS custom properties on
-`:root`, so the entire UI re-colors without a reload.
+There's no theme code at all — that's the point. todarchy renders with the
+terminal's ANSI palette (plus `REVERSED` for the cursor row), and Omarchy
+already themes your terminal. Run `omarchy-theme-set "Tokyo Night"` and every
+terminal recolors; todarchy, living inside one, comes along for free. The
+old Tauri build needed a 500-line theme watcher to parse `alacritty.toml` and
+repaint CSS variables because a WebView doesn't inherit terminal colors — a
+TUI deletes that whole problem.
 
-If you're curious about the full token map — see
-[`src-tauri/src/theme.rs`](src-tauri/src/theme.rs) and
-[`src/theme/cssVars.ts`](src/theme/cssVars.ts).
+## Configuration & sync
+
+Sync is configured by editing a text file — no in-app settings screen, true to
+Omarchy. The app **reads** `~/.config/todarchy/config.toml` (live: the watchers
+re-read it every tick, so edits apply within a second or two) and never rewrites
+it, so your comments stay put. It's created, commented, on first run:
+
+```toml
+# todarchy configuration — edit this file by hand.
+
+# A folder your OS keeps in sync across devices (Syncthing / Dropbox / iCloud).
+sync_folder = ""
+
+# A self-hosted todarchy-server relay (alternative or additional transport).
+server_base_url = ""
+
+# Shared doc id for the relay — must be IDENTICAL on all your devices.
+# Generate one with:  todarchy gen-id
+server_main_doc_id = ""
+```
+
+Turn on folder sync by pointing `sync_folder` at a synced directory; turn on the
+relay by setting `server_base_url` + a shared `server_main_doc_id` (run
+`todarchy gen-id` to mint one, paste the same value on every device). Both can
+run at once. From inside the app, the command palette offers **"sync: edit
+config"** (opens this file in `$EDITOR`) and **"sync: check server"** — but no
+config lives in the UI.
 
 ## Data layout
 
@@ -154,28 +225,35 @@ the CLI + waybar module share it without a db driver.
 ## Development
 
 ```bash
-npm install
-npx tauri dev           # hot-reload dev build
+cargo run -p todarchy-tui      # run the TUI
+cargo test                     # core + tui unit tests
 ```
 
-Frontend is React + Vite, ported from the design mocks in `design-mocks/`.
-Backend is Rust + Tauri 2.
+Pure Rust, one Cargo workspace:
 
-See comments in [`src-tauri/src/main.rs`](src-tauri/src/main.rs) for the
-command handlers and [`src/ui/app.jsx`](src/ui/app.jsx) for the main UI
-tree (2 000-line single file — it's the design mock, ported as-is).
+- **`crates/todarchy-core`** — the Tauri-free heart: the Automerge task
+  store, all three sync transports (folder / relay / encrypted sharing), the
+  keyring wrapper, and the due-task notifier. UI-agnostic; the only thing a
+  front end supplies is an implementation of the 3-method `EventSink` trait.
+- **`crates/todarchy-tui`** — the Ratatui front end. `model.rs` is the data
+  model + parsers, `app.rs` the state machine + keymap, `ui.rs` the
+  rendering, `main.rs` the async runtime that wires core's watchers to the
+  event loop.
+- **`crates/todarchy-cli`** (`tod`) and **`crates/todarchy-waybar`** — share
+  the same JSON store.
 
 ## Roadmap
 
-- **v0.1** (this release) — local-only, theme adoption, CLI, waybar
-- **v0.2** — end-to-end encrypted sync across devices
-  (see [`docs/SYNC.md`](docs/SYNC.md) for the planned protocol)
-- **v0.3** — project templates, due-time precision, recurring tasks
+- **v0.1** — local-only, theme adoption, CLI, waybar (Tauri/WebView build)
+- **v0.2** — Automerge sync: shared folder, relay, encrypted per-project sharing
+- **v0.3** (this release) — Mac parity, then the rewrite to a native Ratatui
+  TUI: no WebKit, no Node, themed by the terminal, ~11 MB static binary
+- **next** — recurring tasks, due-time precision, project templates
 
 ## Credits
 
-- Designed by **Claude Design** (Anthropic design agent)
-- Built by **Claude Code** (Anthropic coding agent) — working in this repo
+- Originally designed by **Claude Design** (Anthropic design agent)
+- Built and rewritten to a TUI by **Claude Code** (Anthropic coding agent)
 - Inspired by Omarchy's aesthetic and its remarkable commitment to keyboard-
   first, terminal-native tools
 

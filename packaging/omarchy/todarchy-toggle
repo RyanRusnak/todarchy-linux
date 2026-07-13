@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# todarchy — Hyprland scratchpad toggle. Super+T summons/dismisses a
+# floating terminal running the todarchy TUI on a special workspace.
+#
+# Strategy: if a todarchy window exists, just toggle the special workspace
+# (show/hide). Otherwise launch it (the float/size/center window rules apply
+# at map time), move it to special:todarchy silently, then reveal.
+#
+# Assumes `todarchy` and `alacritty` are on PATH. Swap alacritty for your
+# terminal (foot: `foot --app-id=todarchy todarchy`; kitty/ghostty similar).
+set -u
+
+if hyprctl clients -j | grep -q '"class": *"todarchy"'; then
+  hyprctl dispatch togglespecialworkspace todarchy
+  exit 0
+fi
+
+alacritty --class todarchy -e todarchy >/dev/null 2>&1 &
+# wait for the window to map before moving it
+for _ in $(seq 1 60); do
+  hyprctl clients -j | grep -q '"class": *"todarchy"' && break
+  sleep 0.05
+done
+hyprctl dispatch movetoworkspacesilent "special:todarchy,class:^todarchy$"
+hyprctl dispatch togglespecialworkspace todarchy

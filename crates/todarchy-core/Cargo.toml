@@ -1,0 +1,39 @@
+[package]
+name = "todarchy-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Tauri-free core: task store, Automerge sync, encrypted sharing, HTTP relay"
+
+[lib]
+name = "todarchy_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+toml = "0.8"
+notify = "6"                     # inotify wrapper for sync-folder watching
+thiserror = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
+# sync — Automerge CRDT for concurrent-edit merges across devices.
+automerge = "0.8"
+# sharing — per-project encrypted files. ChaCha20-Poly1305 envelope
+# matches the iOS app's CryptoBox byte-for-byte.
+chacha20poly1305 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+keyring = "3"
+# HTTP relay client for server-sync mode. Rustls to avoid OpenSSL on the host.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+once_cell = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+# Isolated temporary sync folders for per_project/shared tests.
+tempfile = "3"
+# In-process HTTP endpoints for server_client tests.
+wiremock = "0.6"
