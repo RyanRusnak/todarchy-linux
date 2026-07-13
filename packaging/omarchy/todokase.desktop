@@ -1,12 +1,12 @@
 [Desktop Entry]
 Type=Application
-Name=todarchy
+Name=Todokase
 Comment=Keyboard-first tasks for Omarchy
 # Launch the TUI inside a floating terminal. --class lets the Hyprland
 # window rules in hyprland.snippet.conf float + center it.
-Exec=alacritty --class todarchy -e todarchy
-Icon=todarchy
+Exec=alacritty --class todokase -e todokase
+Icon=todokase
 Terminal=false
 Categories=Utility;Office;
 Keywords=todo;tasks;gtd;
-StartupWMClass=todarchy
+StartupWMClass=todokase

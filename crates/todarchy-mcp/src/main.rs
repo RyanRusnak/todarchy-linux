@@ -75,7 +75,7 @@ async fn dispatch(method: &str, params: Value) -> std::result::Result<Value, Rpc
         "initialize" => Ok(json!({
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": { "tools": {} },
-            "serverInfo": { "name": "todarchy", "version": env!("CARGO_PKG_VERSION") },
+            "serverInfo": { "name": "todokase", "version": env!("CARGO_PKG_VERSION") },
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools::list() })),

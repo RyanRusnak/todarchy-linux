@@ -1,11 +1,11 @@
-// Waybar custom/todarchy module — merge into ~/.config/waybar/config
+// Waybar custom/todokase module — merge into ~/.config/waybar/config
 //
-// Add "custom/todarchy" into your modules-right array, then:
+// Add "custom/todokase" into your modules-right array, then:
 
-"custom/todarchy": {
-  "exec": "todarchy-waybar",
+"custom/todokase": {
+  "exec": "todokase-waybar",
   "interval": 30,
   "return-type": "json",
-  "on-click": "alacritty --class todarchy -e todarchy",
+  "on-click": "alacritty --class todokase -e todokase",
   "tooltip": true
 }

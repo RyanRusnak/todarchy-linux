@@ -1,10 +1,10 @@
 # Maintainer: Ryan Rusnak <ryan@airspace.com>
-pkgname=todarchy-git
+pkgname=todokase-git
 pkgver=0.3.0.r0
 pkgrel=1
 pkgdesc="Keyboard-first, terminal-native task manager for Omarchy"
 arch=('x86_64')
-url="https://github.com/ryanrusnak/todarchy-linux"
+url="https://github.com/ryanrusnak/todokase"
 license=('MIT')
 # The TUI has no GUI runtime deps — it's a terminal app. keyring/libsecret
 # is used for shared-project keys; the rest are optional niceties.
@@ -12,14 +12,14 @@ depends=('gcc-libs' 'libsecret')
 makedepends=('rust' 'cargo' 'git')
 optdepends=('wl-clipboard: copy share links and sync doc ids to the clipboard'
             'libnotify: desktop notifications when deferred tasks come back'
-            'waybar: task-count module (todarchy-waybar)'
+            'waybar: task-count module (todokase-waybar)'
             'alacritty: default terminal used by the .desktop launcher')
-provides=('todarchy' 'tod' 'todarchy-waybar')
+provides=('todokase' 'tod' 'todokase-waybar' 'todokase-mcp')
 source=("git+$url.git")
 sha256sums=('SKIP')
 
 pkgver() {
-  cd todarchy-linux
+  cd todokase
   # Base semver comes from the workspace [workspace.package] version, then
   # the usual -git commit count + short hash.
   local base
@@ -28,28 +28,29 @@ pkgver() {
 }
 
 build() {
-  cd todarchy-linux
-  # One cargo invocation builds the whole workspace: the TUI (todarchy),
-  # the CLI (tod), and the waybar helper. No node, no webkit, no bundler.
+  cd todokase
+  # One cargo invocation builds the whole workspace. Crate (package) names keep
+  # the stable internal `todarchy-*` id; the produced binaries are the public
+  # `todokase*` / `tod` names.
   cargo build --release --locked \
     -p todarchy-tui -p todarchy-cli -p todarchy-waybar -p todarchy-mcp
 }
 
 package() {
-  cd todarchy-linux
-  # TUI (bin name "todarchy", from crates/todarchy-tui)
-  install -Dm755 target/release/todarchy            "$pkgdir/usr/bin/todarchy"
-  # CLI companion (bin name "tod", from crates/todarchy-cli)
+  cd todokase
+  # TUI (bin "todokase", from crates/todarchy-tui)
+  install -Dm755 target/release/todokase            "$pkgdir/usr/bin/todokase"
+  # CLI companion (bin "tod", from crates/todarchy-cli)
   install -Dm755 target/release/tod                 "$pkgdir/usr/bin/tod"
   # Waybar helper
-  install -Dm755 target/release/todarchy-waybar     "$pkgdir/usr/bin/todarchy-waybar"
+  install -Dm755 target/release/todokase-waybar     "$pkgdir/usr/bin/todokase-waybar"
   # Hyprland scratchpad toggle (Super+T)
-  install -Dm755 packaging/omarchy/todarchy-toggle  "$pkgdir/usr/bin/todarchy-toggle"
+  install -Dm755 packaging/omarchy/todokase-toggle  "$pkgdir/usr/bin/todokase-toggle"
   # MCP server (Model Context Protocol) for LLM access to the task store
-  install -Dm755 target/release/todarchy-mcp        "$pkgdir/usr/bin/todarchy-mcp"
+  install -Dm755 target/release/todokase-mcp        "$pkgdir/usr/bin/todokase-mcp"
   # Desktop integration + share-link scheme handler
-  install -Dm644 packaging/omarchy/todarchy.desktop        "$pkgdir/usr/share/applications/todarchy.desktop"
-  install -Dm644 packaging/omarchy/todarchy-accept.desktop "$pkgdir/usr/share/applications/todarchy-accept.desktop"
-  install -Dm644 packaging/omarchy/todarchy.png            "$pkgdir/usr/share/icons/hicolor/128x128/apps/todarchy.png"
+  install -Dm644 packaging/omarchy/todokase.desktop        "$pkgdir/usr/share/applications/todokase.desktop"
+  install -Dm644 packaging/omarchy/todokase-accept.desktop "$pkgdir/usr/share/applications/todokase-accept.desktop"
+  install -Dm644 packaging/omarchy/todokase.png            "$pkgdir/usr/share/icons/hicolor/128x128/apps/todokase.png"
   install -Dm644 LICENSE                                   "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

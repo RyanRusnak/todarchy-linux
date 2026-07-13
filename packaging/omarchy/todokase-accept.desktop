@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Todokase share handler
+Comment=Accept todarchy:// share links
+# Headless: `todokase accept <url>` stores the shared project's key and folds
+# its metadata into the store, then exits. No window. NOTE: the URL scheme
+# stays `todarchy://` — it's the cross-platform share protocol shared with the
+# iOS/macOS apps, not a brand surface.
+Exec=todokase accept %u
+Icon=todokase
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/todarchy;
+Categories=Utility;
+
+# Register this handler once, after install:
+#   xdg-mime default todokase-accept.desktop x-scheme-handler/todarchy

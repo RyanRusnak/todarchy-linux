@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# todokase — Hyprland scratchpad toggle. Super+T summons/dismisses a
+# floating terminal running the todokase TUI on a special workspace.
+#
+# Strategy: if a todokase window exists, just toggle the special workspace
+# (show/hide). Otherwise launch it (the float/size/center window rules apply
+# at map time), move it to special:todokase silently, then reveal.
+#
+# Assumes `todokase` and `alacritty` are on PATH. Swap alacritty for your
+# terminal (foot: `foot --app-id=todokase todokase`; kitty/ghostty similar).
+set -u
+
+if hyprctl clients -j | grep -q '"class": *"todokase"'; then
+  hyprctl dispatch togglespecialworkspace todokase
+  exit 0
+fi
+
+alacritty --class todokase -e todokase >/dev/null 2>&1 &
+# wait for the window to map before moving it
+for _ in $(seq 1 60); do
+  hyprctl clients -j | grep -q '"class": *"todokase"' && break
+  sleep 0.05
+done
+hyprctl dispatch movetoworkspacesilent "special:todokase,class:^todokase$"
+hyprctl dispatch togglespecialworkspace todokase

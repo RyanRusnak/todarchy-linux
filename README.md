@@ -1,14 +1,19 @@
-# todarchy-linux
+# todokase
 
 Keyboard-first, terminal-native task manager for **Omarchy** (Arch + Hyprland).
 Runs as a TUI inside your terminal, so it inherits your active Omarchy theme
 automatically — pick a theme from the Omarchy menu (or run
-`omarchy-theme-set "Tokyo Night"`) and todarchy re-colors with the terminal.
+`omarchy-theme-set "Tokyo Night"`) and todokase re-colors with the terminal.
 No browser engine, no config: a small static binary in a floating window.
 
 This is the Linux build; a mobile and web version are planned as separate
-repos. The binary is called `todarchy` (the TUI), the CLI is `tod`, and the
-Waybar helper is `todarchy-waybar`. All three share one JSON store.
+repos. The binary is called `todokase` (the TUI), the CLI is `tod`, and the
+Waybar helper is `todokase-waybar`. All three share one JSON store.
+
+> Internal note: the Cargo crates are still named `todarchy-*` and the data
+> dir is `~/.local/share/todarchy/` — a deliberately stable internal id that
+> won't churn if the public name changes again. Only public surfaces are
+> "todokase".
 
 <!-- TODO: add a real screenshot — `docs/screenshot.png` once you've taken one. -->
 
@@ -36,28 +41,29 @@ Requires `rustup` (plus `libsecret` for shared-project keys — already on a
 fresh Omarchy install). No Node, no WebKit.
 
 ```bash
-git clone https://github.com/ryanrusnak/todarchy-linux.git
-cd todarchy-linux
+git clone https://github.com/ryanrusnak/todokase.git
+cd todokase
 
-cargo build --release          # builds todarchy (TUI), tod (CLI), todarchy-waybar
+cargo build --release          # builds todokase (TUI), tod (CLI), todokase-waybar
 
 # Install binaries to ~/.local/bin
-install -Dm755 target/release/todarchy        ~/.local/bin/todarchy
+install -Dm755 target/release/todokase        ~/.local/bin/todokase
 install -Dm755 target/release/tod             ~/.local/bin/tod
-install -Dm755 target/release/todarchy-waybar ~/.local/bin/todarchy-waybar
+install -Dm755 target/release/todokase-waybar ~/.local/bin/todokase-waybar
 
 # Optional: desktop entry + share-link handler so Walker / your launcher
-# finds it and todarchy:// links open the app
-install -Dm644 packaging/omarchy/todarchy.desktop \
-  ~/.local/share/applications/todarchy.desktop
-install -Dm644 packaging/omarchy/todarchy-accept.desktop \
-  ~/.local/share/applications/todarchy-accept.desktop
-install -Dm644 packaging/omarchy/todarchy.png \
-  ~/.local/share/icons/hicolor/128x128/apps/todarchy.png
-xdg-mime default todarchy-accept.desktop x-scheme-handler/todarchy
+# finds it and todarchy:// links open the app (the URL scheme stays
+# todarchy:// — it's the cross-platform share protocol, not a brand surface)
+install -Dm644 packaging/omarchy/todokase.desktop \
+  ~/.local/share/applications/todokase.desktop
+install -Dm644 packaging/omarchy/todokase-accept.desktop \
+  ~/.local/share/applications/todokase-accept.desktop
+install -Dm644 packaging/omarchy/todokase.png \
+  ~/.local/share/icons/hicolor/128x128/apps/todokase.png
+xdg-mime default todokase-accept.desktop x-scheme-handler/todarchy
 ```
 
-Launch by running `todarchy` in any terminal, or bind it in Hyprland — see below.
+Launch by running `todokase` in any terminal, or bind it in Hyprland — see below.
 
 ## Install (AUR PKGBUILD)
 
@@ -66,18 +72,18 @@ clean build dir and run `makepkg -si`.
 
 ## Hyprland keybind
 
-todarchy is a terminal app, so `Super+T` opens it in a floating terminal
-window. Add to `~/.config/hypr/bindings.conf` + `windows.conf` (or drop the
-snippet in `packaging/omarchy/hyprland.snippet.conf` into your conf folder):
+todokase is a terminal app, so `Super+T` opens it in a floating terminal
+window as a scratchpad. Drop the snippet in
+`packaging/omarchy/hyprland.snippet.conf` into your conf folder (it installs a
+`todokase-toggle` helper for summon/dismiss). The essentials:
 
 ```conf
-# open todarchy in a floating terminal (Alacritty here; foot/kitty/ghostty
-# equivalents are in the snippet)
-bind = SUPER, T, exec, uwsm app -- alacritty --class todarchy -e todarchy
+bind = SUPER, T, exec, todokase-toggle
 
-windowrule = float,  class:^(todarchy)$
-windowrule = size 900 640, class:^(todarchy)$
-windowrule = center, class:^(todarchy)$
+windowrule = float on,        match:class todokase
+windowrule = size 1200 760,   match:class todokase
+windowrule = center on,       match:class todokase
+windowrule = opacity 0.85 0.78, match:class todokase
 ```
 
 ## Waybar module
@@ -85,19 +91,19 @@ windowrule = center, class:^(todarchy)$
 Add to your waybar config:
 
 ```jsonc
-"custom/todarchy": {
-  "exec": "todarchy-waybar",
+"custom/todokase": {
+  "exec": "todokase-waybar",
   "interval": 30,
   "return-type": "json",
-  "on-click": "alacritty --class todarchy -e todarchy"
+  "on-click": "alacritty --class todokase -e todokase"
 }
 ```
 
-And reference `custom/todarchy` in your `modules-right` (or wherever).
+And reference `custom/todokase` in your `modules-right` (or wherever).
 
 ## MCP server
 
-`todarchy-mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+`todokase-mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
 server (stdio transport) that lets an LLM read and edit your tasks. It drives
 the same store as everything else, so reads pull the latest state and writes
 ride your configured sync — a task Claude adds shows up on your other devices,
@@ -110,7 +116,7 @@ or a unique title substring.
 Register it with Claude Code:
 
 ```bash
-claude mcp add todarchy -- ~/.local/bin/todarchy-mcp
+claude mcp add todokase -- ~/.local/bin/todokase-mcp
 ```
 
 Or in Claude Desktop's `claude_desktop_config.json`:
@@ -118,7 +124,7 @@ Or in Claude Desktop's `claude_desktop_config.json`:
 ```jsonc
 {
   "mcpServers": {
-    "todarchy": { "command": "todarchy-mcp" }
+    "todokase": { "command": "todokase-mcp" }
   }
 }
 ```
@@ -174,10 +180,10 @@ vice-versa).
 
 ## How theme adoption works
 
-There's no theme code at all — that's the point. todarchy renders with the
+There's no theme code at all — that's the point. todokase renders with the
 terminal's ANSI palette (plus `REVERSED` for the cursor row), and Omarchy
 already themes your terminal. Run `omarchy-theme-set "Tokyo Night"` and every
-terminal recolors; todarchy, living inside one, comes along for free. The
+terminal recolors; todokase, living inside one, comes along for free. The
 old Tauri build needed a 500-line theme watcher to parse `alacritty.toml` and
 repaint CSS variables because a WebView doesn't inherit terminal colors — a
 TUI deletes that whole problem.
@@ -185,12 +191,13 @@ TUI deletes that whole problem.
 ## Configuration & sync
 
 Sync is configured by editing a text file — no in-app settings screen, true to
-Omarchy. The app **reads** `~/.config/todarchy/config.toml` (live: the watchers
+Omarchy. The app **reads** `~/.config/todarchy/config.toml` (internal dir keeps
+the stable name; live: the watchers
 re-read it every tick, so edits apply within a second or two) and never rewrites
 it, so your comments stay put. It's created, commented, on first run:
 
 ```toml
-# todarchy configuration — edit this file by hand.
+# todokase configuration — edit this file by hand.
 
 # A folder your OS keeps in sync across devices (Syncthing / Dropbox / iCloud).
 sync_folder = ""
@@ -199,13 +206,13 @@ sync_folder = ""
 server_base_url = ""
 
 # Shared doc id for the relay — must be IDENTICAL on all your devices.
-# Generate one with:  todarchy gen-id
+# Generate one with:  todokase gen-id
 server_main_doc_id = ""
 ```
 
 Turn on folder sync by pointing `sync_folder` at a synced directory; turn on the
 relay by setting `server_base_url` + a shared `server_main_doc_id` (run
-`todarchy gen-id` to mint one, paste the same value on every device). Both can
+`todokase gen-id` to mint one, paste the same value on every device). Both can
 run at once. From inside the app, the command palette offers **"sync: edit
 config"** (opens this file in `$EDITOR`) and **"sync: check server"** — but no
 config lives in the UI.

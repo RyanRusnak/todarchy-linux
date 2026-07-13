@@ -27,14 +27,14 @@ pub struct Config {
     pub server_base_url: String,
 
     /// Relay doc id for the main store — must match on all your devices.
-    /// Mint one with `todarchy gen-id`.
+    /// Mint one with `todokase gen-id`.
     #[serde(default)]
     pub server_main_doc_id: String,
 }
 
 /// Sentinel in the documented template; its absence means the file is either
 /// missing or in the old (app-written) format and should be migrated.
-const HEADER: &str = "# todarchy configuration";
+const HEADER: &str = "# todokase configuration";
 
 fn config_dir() -> Result<PathBuf> {
     let dir = dirs::config_dir()
@@ -100,7 +100,7 @@ sync_folder = "{sync_folder}"
 server_base_url = "{server}"
 
 # Shared doc id for the relay — must be IDENTICAL on all your devices.
-# Generate one with:  todarchy gen-id
+# Generate one with:  todokase gen-id
 server_main_doc_id = "{doc_id}"
 "#,
         HEADER = HEADER,
@@ -111,7 +111,7 @@ server_main_doc_id = "{doc_id}"
 }
 
 /// Generate a fresh main-doc id matching the iOS `main_<22 base64url>` format
-/// (16 bytes of entropy). Printed by the `todarchy gen-id` subcommand.
+/// (16 bytes of entropy). Printed by the `todokase gen-id` subcommand.
 pub fn generate_main_doc_id() -> String {
     let mut bytes = [0u8; 16];
     rand::rngs::OsRng.fill_bytes(&mut bytes);

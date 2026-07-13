@@ -7,7 +7,7 @@ license.workspace = true
 description = "Keyboard-first, terminal-native task manager for Omarchy"
 
 [[bin]]
-name = "todarchy"
+name = "todokase"
 path = "src/main.rs"
 
 [dependencies]

@@ -7,7 +7,7 @@ license.workspace = true
 description = "MCP (Model Context Protocol) server exposing the todarchy task store"
 
 [[bin]]
-name = "todarchy-mcp"
+name = "todokase-mcp"
 path = "src/main.rs"
 
 [dependencies]
