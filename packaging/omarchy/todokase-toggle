@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
-# todokase — Hyprland scratchpad toggle. Super+T summons/dismisses a
-# floating terminal running the todokase TUI on a special workspace.
+# todokase — Hyprland scratchpad toggle. Super+T summons/dismisses a floating
+# terminal running the todokase TUI on a special workspace.
 #
-# Strategy: if a todokase window exists, just toggle the special workspace
-# (show/hide). Otherwise launch it (the float/size/center window rules apply
-# at map time), move it to special:todokase silently, then reveal.
+# If a window already exists, flip its visibility. On a fresh launch, wait for
+# the window to fully settle, move it to the special workspace, then drive it
+# to the *shown* state explicitly — never a blind toggle, which could race the
+# window's mapping (leaving it tiled on the normal workspace) or desync parity
+# after the TUI is quit with `q`.
 #
 # Assumes `todokase` and `alacritty` are on PATH. Swap alacritty for your
 # terminal (foot: `foot --app-id=todokase todokase`; kitty/ghostty similar).
 set -u
+NAME=todokase
 
-if hyprctl clients -j | grep -q '"class": *"todokase"'; then
-  hyprctl dispatch togglespecialworkspace todokase
+present() { hyprctl clients -j | grep -q "\"class\": *\"$NAME\""; }
+shown()   { hyprctl monitors | grep -q "special workspace: .*(special:$NAME)"; }
+
+if present; then
+  hyprctl dispatch togglespecialworkspace "$NAME"
   exit 0
 fi
 
-alacritty --class todokase -e todokase >/dev/null 2>&1 &
-# wait for the window to map before moving it
-for _ in $(seq 1 60); do
-  hyprctl clients -j | grep -q '"class": *"todokase"' && break
-  sleep 0.05
-done
-hyprctl dispatch movetoworkspacesilent "special:todokase,class:^todokase$"
-hyprctl dispatch togglespecialworkspace todokase
+alacritty --class "$NAME" -e "$NAME" >/dev/null 2>&1 &
+for _ in $(seq 1 100); do present && break; sleep 0.03; done
+sleep 0.15   # let the map + float/size/center windowrules settle
+hyprctl dispatch movetoworkspacesilent "special:$NAME,class:^$NAME$"
+shown || hyprctl dispatch togglespecialworkspace "$NAME"
