@@ -1,8 +1,9 @@
-// tod — CLI companion to the todarchy GUI.
+// tod — CLI companion to the todokase TUI.
 //
-// Shares ~/.local/share/todarchy/tasks.json with the GUI via fs2 file
-// locking, so writes from the CLI appear in the GUI on next reload (and
-// vice-versa). Schema matches the GUI shape (see src/ui/data.jsx).
+// Drives the same todarchy-core store as the TUI and MCP server, so writes go
+// through Automerge and ride your configured sync (a task added here shows up
+// on your other devices), and reads pull the latest state. The `todokase`
+// binary also accepts these subcommands (it delegates to `tod`).
 //
 //   tod add "fix bug @work !today"
 //   tod list                          # today view (overdue + due today + undated)
@@ -10,23 +11,18 @@
 //   tod done <id>                     # prefix-match on the task id
 //   tod defer <id> +3d                # tomorrow, +3d, +1w, mon..sun, YYYY-MM-DD
 //
-// Quick-add parser mirrors the GUI's:
+// Quick-add parser mirrors the TUI's:
 //   @foo   → context (stored as "@foo")
-//   #proj  → project (GUI doesn't have free-form projects from the CLI yet,
-//            so this is ignored for v0.1 — added tasks land in the inbox)
+//   #proj  → project (dropped for now; added tasks land in the inbox)
 //   !today !tomorrow !week           → due keyword
-
-use std::fs::OpenOptions;
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use fs2::FileExt;
 use serde_json::{json, Value};
+use todarchy_core::{store, NullSink};
 
 #[derive(Parser)]
-#[command(name = "tod", version, about = "Omarchy-native tasks — CLI companion to the todarchy GUI")]
+#[command(name = "tod", version, about = "Omarchy-native tasks — CLI companion to the todokase TUI")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -47,72 +43,46 @@ enum Cmd {
     Defer { id: String, when: String },
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Add { text } => add(&text.join(" ")),
-        Cmd::List { all } => list(all),
-        Cmd::Done { id } => done(&id),
-        Cmd::Defer { id, when } => defer(&id, &when),
+        Cmd::Add { text } => add(&text.join(" ")).await,
+        Cmd::List { all } => list(all).await,
+        Cmd::Done { id } => done(&id).await,
+        Cmd::Defer { id, when } => defer(&id, &when).await,
     }
-}
-
-fn tasks_path() -> Result<PathBuf> {
-    let d = dirs::data_local_dir()
-        .or_else(dirs::home_dir)
-        .context("no data dir")?
-        .join("todarchy");
-    std::fs::create_dir_all(&d)?;
-    Ok(d.join("tasks.json"))
 }
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-fn with_store<F: FnOnce(&mut Value) -> Result<()>>(mutator: F) -> Result<()> {
-    let path = tasks_path()?;
-    let mut f = OpenOptions::new()
-        .read(true).write(true).create(true).truncate(false)
-        .open(&path)?;
-    f.lock_exclusive()?;
-
-    let mut buf = String::new();
-    f.read_to_string(&mut buf)?;
-    let mut data: Value = if buf.trim().is_empty() {
-        json!({
-            "version": 1,
-            "tasks": [],
-            "projects": [],
-            "contexts": ["@home","@work","@errands","@mac","@phone","@read"],
-        })
-    } else {
-        serde_json::from_str(&buf)?
-    };
-
+/// Load the store (pulls sync), let the caller mutate the JSON, save it back
+/// through core (writes Automerge + pushes sync).
+async fn with_store<F: FnOnce(&mut Value) -> Result<()>>(mutator: F) -> Result<()> {
+    let mut data = store::load(&NullSink).await?;
     mutator(&mut data)?;
-
-    let out = serde_json::to_vec_pretty(&data)?;
-    f.set_len(0)?;
-    f.seek(SeekFrom::Start(0))?;
-    f.write_all(&out)?;
-    f.unlock()?;
+    store::save(&NullSink, data).await?;
     Ok(())
 }
 
-fn add(text: &str) -> Result<()> {
+async fn add(text: &str) -> Result<()> {
     let parsed = parse_quick_add(text);
     if parsed.title.is_empty() {
         anyhow::bail!("refusing to add an empty task");
     }
+    let title = parsed.title.clone();
     with_store(|data| {
         let arr = data["tasks"].as_array_mut().context("tasks missing")?;
+        let now = now_ms();
         let mut task = json!({
             "id": uuid::Uuid::new_v4().to_string(),
             "list": "inbox",
             "title": parsed.title,
             "note": parsed.note,
-            "created": now_ms(),
+            "created": now,
+            "pos": now,
             "parent": Value::Null,
         });
         if let Some(ctx) = &parsed.ctx {
@@ -123,19 +93,14 @@ fn add(text: &str) -> Result<()> {
         }
         arr.push(task);
         Ok(())
-    })?;
-    println!("✓ added: {}", parsed.title);
+    })
+    .await?;
+    println!("✓ added: {title}");
     Ok(())
 }
 
-fn list(all: bool) -> Result<()> {
-    let path = tasks_path()?;
-    if !path.exists() {
-        println!("(no tasks yet — add some with `tod add \"...\"`)");
-        return Ok(());
-    }
-    let text = std::fs::read_to_string(&path)?;
-    let data: Value = serde_json::from_str(&text)?;
+async fn list(all: bool) -> Result<()> {
+    let data = store::load(&NullSink).await?;
     let now = now_ms();
 
     let arr = data["tasks"].as_array().cloned().unwrap_or_default();
@@ -146,7 +111,6 @@ fn list(all: bool) -> Result<()> {
             if done {
                 return all;
             }
-            // skip deferred tasks unless --all
             let deferred = t
                 .get("deferUntil")
                 .and_then(|v| v.as_i64())
@@ -157,7 +121,6 @@ fn list(all: bool) -> Result<()> {
             if all {
                 return true;
             }
-            // today view: due keyword == today OR no due date (inbox items)
             let due = t.get("due").and_then(|v| v.as_str()).unwrap_or("");
             matches!(due, "today" | "tomorrow" | "")
         })
@@ -195,23 +158,15 @@ fn list(all: bool) -> Result<()> {
         let done = t.get("doneAt").and_then(|v| v.as_i64()).is_some();
         let ctx = t.get("ctx").and_then(|v| v.as_str()).unwrap_or("");
         let due = t.get("due").and_then(|v| v.as_str()).unwrap_or("");
-        let due_str = if due.is_empty() {
-            String::new()
-        } else {
-            format!(" [{due}]")
-        };
+        let due_str = if due.is_empty() { String::new() } else { format!(" [{due}]") };
         let mark = if done { "✓" } else { "·" };
-        let ctx_str = if ctx.is_empty() {
-            String::new()
-        } else {
-            format!(" {ctx}")
-        };
+        let ctx_str = if ctx.is_empty() { String::new() } else { format!(" {ctx}") };
         println!("{mark} {id_short}  {title}{ctx_str}{due_str}");
     }
     Ok(())
 }
 
-fn done(id: &str) -> Result<()> {
+async fn done(id: &str) -> Result<()> {
     let mut matched = false;
     with_store(|data| {
         let arr = data["tasks"].as_array_mut().context("tasks missing")?;
@@ -219,7 +174,6 @@ fn done(id: &str) -> Result<()> {
             let tid = t.get("id").and_then(|v| v.as_str()).unwrap_or("");
             if tid == id || tid.starts_with(id) {
                 t["doneAt"] = Value::from(now_ms());
-                // clear any deferral — done supersedes
                 if t.get("deferUntil").is_some() {
                     t.as_object_mut().unwrap().remove("deferUntil");
                 }
@@ -228,7 +182,8 @@ fn done(id: &str) -> Result<()> {
             }
         }
         Ok(())
-    })?;
+    })
+    .await?;
     if matched {
         println!("✓ done");
     } else {
@@ -237,11 +192,9 @@ fn done(id: &str) -> Result<()> {
     Ok(())
 }
 
-fn defer(id: &str, when: &str) -> Result<()> {
+async fn defer(id: &str, when: &str) -> Result<()> {
     let Some(ts) = parse_when(when) else {
-        anyhow::bail!(
-            "couldn't parse `{when}`. try: today, tomorrow, mon..sun, +3d, +1w, YYYY-MM-DD"
-        );
+        anyhow::bail!("couldn't parse `{when}`. try: today, tomorrow, mon..sun, +3d, +1w, YYYY-MM-DD");
     };
     let mut matched = false;
     with_store(|data| {
@@ -255,7 +208,8 @@ fn defer(id: &str, when: &str) -> Result<()> {
             }
         }
         Ok(())
-    })?;
+    })
+    .await?;
     if matched {
         println!("↻ deferred");
     } else {
@@ -286,12 +240,11 @@ fn parse_quick_add(text: &str) -> QuickAdd {
             continue;
         }
         if let Some(c) = tok.strip_prefix('@') {
-            let val = if c.is_empty() { String::new() } else { format!("@{}", c) };
-            if !val.is_empty() {
-                ctx = Some(val);
+            if !c.is_empty() {
+                ctx = Some(format!("@{c}"));
             }
         } else if tok.starts_with('#') {
-            // projects from the CLI are deferred to v0.2 — dropped for now
+            // projects from the CLI are deferred — dropped for now
         } else if let Some(w) = tok.strip_prefix('!') {
             due = match w.to_ascii_lowercase().as_str() {
                 "today" => Some("today".into()),
@@ -308,12 +261,7 @@ fn parse_quick_add(text: &str) -> QuickAdd {
             title_parts.push(tok);
         }
     }
-    QuickAdd {
-        title: title_parts.join(" "),
-        ctx,
-        due,
-        note,
-    }
+    QuickAdd { title: title_parts.join(" "), ctx, due, note }
 }
 
 fn parse_when(w: &str) -> Option<i64> {

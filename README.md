@@ -145,11 +145,13 @@ tod defer abc12345 mon
 tod defer abc12345 2026-06-01
 ```
 
-The CLI shares `~/.local/share/todarchy/tasks.json` with the GUI via file
-locking, so anything you add from a shell shows up in the GUI on reload (and
-vice-versa).
+The CLI drives the same `todarchy-core` store as the TUI (Automerge-backed),
+so anything you add from a shell persists correctly and rides your configured
+sync to your other devices. `todokase add|list|done|defer …` is equivalent —
+the `todokase` binary delegates those subcommands to `tod`, so you don't have
+to remember the separate name.
 
-## Keyboard (GUI)
+## Keyboard
 
 | key              | what                                         |
 |------------------|----------------------------------------------|

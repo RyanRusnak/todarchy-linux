@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
     }
     if args.get(1).map(String::as_str) == Some("accept") {
         let Some(url) = args.get(2) else {
-            eprintln!("usage: todarchy accept <todarchy://share/…>");
+            eprintln!("usage: todokase accept <todarchy://share/…>");
             std::process::exit(2);
         };
         let sink = NullSink;
@@ -65,6 +65,27 @@ async fn main() -> Result<()> {
             }
             Err(e) => {
                 eprintln!("accept failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // CLI subcommands: `todokase add/list/done/defer` behave like `tod` (which
+    // drives the same store). Delegate so users don't have to remember the
+    // separate `tod` name — running these never launches the TUI.
+    if matches!(
+        args.get(1).map(String::as_str),
+        Some("add") | Some("list") | Some("done") | Some("defer")
+    ) {
+        let tod = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("tod")))
+            .filter(|p| p.exists())
+            .unwrap_or_else(|| std::path::PathBuf::from("tod"));
+        match std::process::Command::new(&tod).args(&args[1..]).status() {
+            Ok(status) => std::process::exit(status.code().unwrap_or(0)),
+            Err(e) => {
+                eprintln!("could not run the `tod` CLI ({}): {e}", tod.display());
                 std::process::exit(1);
             }
         }
