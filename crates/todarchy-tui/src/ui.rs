@@ -66,6 +66,84 @@ pub fn render(frame: &mut Frame, app: &App) {
     if app.palette.is_some() {
         render_palette(frame, app, area);
     }
+    if app.help {
+        render_help(frame, area);
+    }
+}
+
+/// The `?` keymap cheat sheet — a centered overlay grouping every binding.
+fn render_help(frame: &mut Frame, area: Rect) {
+    let ac = accent();
+    // (section, [(keys, description)]) — sections separated by a blank line
+    let groups: [(&str, &[(&str, &str)]); 4] = [
+        ("MOVE", &[
+            ("j / k", "move cursor"),
+            ("⇧J / ⇧K", "reorder within group"),
+            ("gg / G", "top / bottom"),
+            ("h / l", "prev / next list"),
+            ("0 · 1–5", "inbox · project"),
+            ("gi · g1–g5", "jump to inbox · project"),
+            ("Ctrl-d / Ctrl-u", "scroll note & comments"),
+        ]),
+        ("TASK", &[
+            ("o / a / ↵", "add task"),
+            ("x / space", "toggle done"),
+            ("e", "edit title · @ctx · !due"),
+            ("c", "edit note in $EDITOR"),
+            ("⇧C", "add comment in $EDITOR"),
+            ("d", "defer (tomorrow, +3d, fri…)"),
+            ("mi · m1–m5", "move to inbox · project"),
+            ("Tab / ⇧Tab", "nest / un-nest"),
+            ("z", "collapse / expand"),
+            ("Del / ⌫", "delete"),
+            ("u", "undo (incl. delete)"),
+        ]),
+        ("VIEW", &[
+            ("v", "cycle todo · next · all"),
+            ("fd / fs", "toggle show done / deferred"),
+            ("/", "search in list"),
+            ("i", "toggle detail pane"),
+            ("Esc", "clear search / context filter"),
+        ]),
+        ("GENERAL", &[
+            (": or Ctrl-K", "command palette (+ task search)"),
+            ("?", "this help"),
+            ("q", "quit"),
+        ]),
+    ];
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (section, rows) in groups {
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.push(Line::from(Span::styled(section, Style::default().fg(ac).add_modifier(Modifier::BOLD))));
+        for (keys, desc) in rows {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {keys:<16}"), Style::default().fg(ac)),
+                Span::styled((*desc).to_string(), Style::default().fg(Color::Reset)),
+            ]));
+        }
+    }
+
+    let width = 54u16.min(area.width.saturating_sub(2));
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ac))
+        .title(Span::styled(" keys · esc to close ", Style::default().fg(ac)))
+        .padding(Padding::horizontal(1));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_sidebar(frame: &mut Frame, app: &App, area: Rect) {
@@ -445,7 +523,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
     let hint = format!(
-        " j/k move · o add · x done · d defer · Tab nest · {} palette · q quit",
+        " j/k move · o add · x done · d defer · {} palette · ? keys · q quit",
         g.palette
     );
     frame.render_widget(Paragraph::new(Span::styled(hint, Style::default().fg(DIM))), area);
@@ -664,6 +742,31 @@ mod snapshot {
             for x in 0..buf.area.width {
                 out.push_str(buf[(x, y)].symbol());
             }
+            out.push('\n');
+        }
+        println!("{out}");
+    }
+
+    #[test]
+    fn help_overlay_snapshot() {
+        std::env::set_var("TODARCHY_ASCII", "1");
+        let store = Store { tasks: vec![], projects: vec![], contexts: crate::model::default_contexts() };
+        let mut app = App::new(store, SyncStatus {
+            folder: String::new(), last_synced_at: None, last_sync_error: None,
+            server_base_url: String::new(), server_main_doc_id: String::new(),
+        });
+        app.help = true;
+        let mut terminal = Terminal::new(TestBackend::new(96, 40)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut out = String::from("\n");
+        for y in 0..buf.area.height {
+            let mut row = String::new();
+            for x in 0..buf.area.width {
+                row.push_str(buf[(x, y)].symbol());
+            }
+            if row.trim().is_empty() { continue; }
+            out.push_str(row.trim_end());
             out.push('\n');
         }
         println!("{out}");

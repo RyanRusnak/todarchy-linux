@@ -145,6 +145,8 @@ pub struct App {
     pub pending_chord: Option<(char, Instant)>,
     pub dirty: bool,
     pub quit: bool,
+    /// The `?` keymap cheat-sheet overlay.
+    pub help: bool,
     /// Detail-pane note scroll offset (lines), and the task it belongs to so
     /// we can zero it when the selection changes. `detail_max_scroll` is set
     /// by the renderer (which knows the wrapped line count + viewport).
@@ -176,6 +178,7 @@ impl App {
             pending_chord: None,
             dirty: false,
             quit: false,
+            help: false,
             detail_scroll: 0,
             detail_anchor: None,
             detail_max_scroll: std::cell::Cell::new(0),
@@ -416,6 +419,16 @@ impl App {
         if self.prompt.is_some() {
             return self.prompt_key(key);
         }
+        if self.help {
+            // any of these dismiss the cheat sheet; other keys are swallowed
+            if matches!(
+                key.code,
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter
+            ) {
+                self.help = false;
+            }
+            return None;
+        }
 
         // Ctrl-K opens the palette from anywhere.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('k') {
@@ -520,8 +533,12 @@ impl App {
             KeyCode::Delete | KeyCode::Backspace => self.apply(Action::Delete),
             KeyCode::Char('u') => self.apply(Action::Undo),
             KeyCode::Char('/') => self.apply(Action::OpenSearch),
-            KeyCode::Char(':') | KeyCode::Char('?') => {
+            KeyCode::Char(':') => {
                 self.palette = Some(Palette::default());
+                None
+            }
+            KeyCode::Char('?') => {
+                self.help = true;
                 None
             }
             KeyCode::Char('i') => self.apply(Action::ToggleDetail),

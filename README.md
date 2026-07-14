@@ -169,6 +169,7 @@ vice-versa).
 | `u`              | undo                                          |
 | `/`              | search in list                                |
 | `:` / `Ctrl-K`   | command palette                                |
+| `?`              | keymap cheat sheet (this table, in-app)        |
 | `i`              | toggle detail pane                             |
 | `Ctrl-d`/`Ctrl-u`| scroll the detail note/comments               |
 | `Tab` / `S-Tab`  | indent / outdent (nest under sibling above)   |
