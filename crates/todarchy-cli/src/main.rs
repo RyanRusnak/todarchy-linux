@@ -30,10 +30,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Add a task. Supports @context #project !today|tomorrow|week inline.
-    Add { text: Vec<String> },
-    /// List tasks. Defaults to today.
+    /// Add a task. Supports @context !today|tomorrow|week inline.
+    Add {
+        /// Project/list to add to (name, id, or "inbox"). Defaults to inbox.
+        #[arg(short = 'p', long = "project")]
+        project: Option<String>,
+        text: Vec<String>,
+    },
+    /// List tasks in a project (defaults to inbox).
     List {
+        /// Project/list to show (name, id, or "inbox"). Defaults to inbox.
+        #[arg(short = 'p', long = "project")]
+        project: Option<String>,
+        /// Include done + deferred tasks.
         #[arg(long)]
         all: bool,
     },
@@ -47,10 +56,41 @@ enum Cmd {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Add { text } => add(&text.join(" ")).await,
-        Cmd::List { all } => list(all).await,
+        Cmd::Add { project, text } => add(&text.join(" "), project).await,
+        Cmd::List { project, all } => list(project, all).await,
         Cmd::Done { id } => done(&id).await,
         Cmd::Defer { id, when } => defer(&id, &when).await,
+    }
+}
+
+/// Resolve a project selector (name, id, or "inbox") to a task `list` id.
+fn resolve_list(data: &Value, sel: &str) -> Result<String> {
+    if sel.eq_ignore_ascii_case("inbox") {
+        return Ok("inbox".into());
+    }
+    let projects = data.get("projects").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    if let Some(p) = projects.iter().find(|p| p.get("id").and_then(|v| v.as_str()) == Some(sel)) {
+        return Ok(p["id"].as_str().unwrap().to_string());
+    }
+    let matches: Vec<&Value> = projects
+        .iter()
+        .filter(|p| {
+            p.get("name")
+                .and_then(|v| v.as_str())
+                .map(|n| n.eq_ignore_ascii_case(sel))
+                .unwrap_or(false)
+        })
+        .collect();
+    match matches.as_slice() {
+        [p] => Ok(p["id"].as_str().unwrap().to_string()),
+        [] => {
+            let names: Vec<String> = projects
+                .iter()
+                .filter_map(|p| p.get("name").and_then(|v| v.as_str()).map(String::from))
+                .collect();
+            anyhow::bail!("no project '{sel}'. available: inbox, {}", names.join(", "))
+        }
+        _ => anyhow::bail!("more than one project named '{sel}'; use its id"),
     }
 }
 
@@ -67,18 +107,23 @@ async fn with_store<F: FnOnce(&mut Value) -> Result<()>>(mutator: F) -> Result<(
     Ok(())
 }
 
-async fn add(text: &str) -> Result<()> {
+async fn add(text: &str, project: Option<String>) -> Result<()> {
     let parsed = parse_quick_add(text);
     if parsed.title.is_empty() {
         anyhow::bail!("refusing to add an empty task");
     }
     let title = parsed.title.clone();
-    with_store(|data| {
+    let dest = project.clone().unwrap_or_else(|| "inbox".into());
+    with_store(move |data| {
+        let list = match &project {
+            Some(p) => resolve_list(data, p)?,
+            None => "inbox".to_string(),
+        };
         let arr = data["tasks"].as_array_mut().context("tasks missing")?;
         let now = now_ms();
         let mut task = json!({
             "id": uuid::Uuid::new_v4().to_string(),
-            "list": "inbox",
+            "list": list,
             "title": parsed.title,
             "note": parsed.note,
             "created": now,
@@ -95,18 +140,25 @@ async fn add(text: &str) -> Result<()> {
         Ok(())
     })
     .await?;
-    println!("✓ added: {title}");
+    println!("✓ added to {dest}: {title}");
     Ok(())
 }
 
-async fn list(all: bool) -> Result<()> {
+async fn list(project: Option<String>, all: bool) -> Result<()> {
     let data = store::load(&NullSink).await?;
     let now = now_ms();
+    let target = match &project {
+        Some(p) => resolve_list(&data, p)?,
+        None => "inbox".to_string(),
+    };
 
     let arr = data["tasks"].as_array().cloned().unwrap_or_default();
     let mut rows: Vec<&Value> = arr
         .iter()
         .filter(|t| {
+            if t.get("list").and_then(|v| v.as_str()).unwrap_or("inbox") != target {
+                return false;
+            }
             let done = t.get("doneAt").and_then(|v| v.as_i64()).is_some();
             if done {
                 return all;
@@ -118,11 +170,7 @@ async fn list(all: bool) -> Result<()> {
             if deferred {
                 return all;
             }
-            if all {
-                return true;
-            }
-            let due = t.get("due").and_then(|v| v.as_str()).unwrap_or("");
-            matches!(due, "today" | "tomorrow" | "")
+            true
         })
         .collect();
 
@@ -140,9 +188,9 @@ async fn list(all: bool) -> Result<()> {
         println!(
             "{}",
             if all {
-                "(no tasks)"
+                "(no tasks in this list)"
             } else {
-                "(nothing due today — use `tod list --all` for everything)"
+                "(no open tasks — use --all to include done + deferred)"
             }
         );
         return Ok(());

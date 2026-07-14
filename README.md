@@ -134,16 +134,17 @@ Then ask e.g. "add oat milk to my groceries list" or "what's on my inbox?".
 ## CLI cheatsheet
 
 ```bash
-tod add "fix bug @work !today"      # quick-add with context + due
-tod add "buy milk @errands"          # no due date → lands in inbox view
-tod list                             # today view (overdue + due today + inbox)
-tod list --all                       # everything including done + deferred
+tod add "fix bug @work !today"       # quick-add with context + due → inbox
+tod add "ship release" -p work       # add to a project (name, id, or "inbox")
+tod list                             # open tasks in inbox (the default list)
+tod list -p work                     # open tasks in the "work" project
+tod list --project work --all        # …including done + deferred
 tod done abc12345                    # prefix-match on the 8-char id
-tod defer abc12345 tomorrow
-tod defer abc12345 +3d
-tod defer abc12345 mon
-tod defer abc12345 2026-06-01
+tod defer abc12345 tomorrow          # tomorrow, +3d, +1w, mon..sun, YYYY-MM-DD
 ```
+
+`-p` / `--project` takes a project name, id, or `inbox`; omitting it defaults to
+inbox. `todokase add|list …` accepts the same flags.
 
 The CLI drives the same `todarchy-core` store as the TUI (Automerge-backed),
 so anything you add from a shell persists correctly and rides your configured
